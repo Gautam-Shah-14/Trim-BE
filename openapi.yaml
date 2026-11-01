@@ -1,0 +1,5316 @@
+openapi: 3.1.0
+info:
+  title: Trim API
+  version: 0.1.0
+  description: "REST API of the Trim salon platform. Success: `{data, meta?}`. Error: `{error:{code,message,details?}}`. Money = integer paise; times = ISO-8601 UTC; phones = E.164. GENERATED from the route registry by `npm run openapi` - do not edit by hand."
+servers:
+  - url: /v1
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_FAILED
+                - UNAUTHENTICATED
+                - FORBIDDEN
+                - NOT_FOUND
+                - CONFLICT
+                - SLOT_TAKEN
+                - HOLD_EXPIRED
+                - ALREADY_CHECKED_IN
+                - VERSION_MISMATCH
+                - OUT_OF_WINDOW
+                - PLAN_LIMIT
+                - SUBSCRIPTION_INACTIVE
+                - RATE_LIMITED
+                - INTERNAL
+            message: &a1
+              type: string
+            details:
+              description: Array of {field, issue} for VALIDATION_FAILED; object (e.g. {limit}) for PLAN_LIMIT
+              oneOf:
+                - type: array
+                  items:
+                    type: object
+                    properties:
+                      field: *a1
+                      issue: *a1
+                - type: object
+            reason:
+              type: string
+              description: Machine-readable sub-reason for generic CONFLICT/FORBIDDEN, e.g. CANCEL_CUTOFF, QR_OUTDATED, WRONG_SALON
+          required:
+            - code
+            - message
+      required:
+        - error
+    User:
+      type: object
+      properties:
+        id: &a2
+          type: string
+          format: uuid
+        fullName: *a1
+        phone:
+          type:
+            - string
+            - "null"
+        email:
+          type:
+            - string
+            - "null"
+        role:
+          type: string
+          enum:
+            - customer
+            - salon_user
+            - admin
+            - sales_agent
+        avatarMediaId:
+          type:
+            - string
+            - "null"
+        mustChangePassword:
+          type: boolean
+    Membership:
+      type: object
+      properties:
+        salonId: *a2
+        salonName: *a1
+        salonStatus: *a1
+        staffId: *a2
+        roleId: *a2
+        roleName: *a1
+        permissions:
+          type: array
+          items: *a1
+        planCode: *a1
+        subscriptionStatus: *a1
+        readOnly:
+          type: boolean
+        desktopAccess:
+          type: boolean
+    AuthTokens:
+      type: object
+      properties:
+        accessToken: *a1
+        refreshToken: *a1
+        expiresIn: &a3
+          type: integer
+    AuthResult:
+      type: object
+      properties:
+        accessToken: *a1
+        refreshToken: *a1
+        expiresIn: *a3
+        user:
+          $ref: "#/components/schemas/User"
+        memberships:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+        salon:
+          type: object
+          properties:
+            id: *a2
+            name: *a1
+            status: *a1
+    Booking:
+      type: object
+      properties:
+        id: *a2
+        salonId: *a2
+        salonName: *a1
+        customerId:
+          type:
+            - string
+            - "null"
+        customerName: *a1
+        customerPhone:
+          type:
+            - string
+            - "null"
+        staffId: *a2
+        staffName: *a1
+        source:
+          enum:
+            - app
+            - walk_in
+        status:
+          enum:
+            - held
+            - confirmed
+            - checked_in
+            - completed
+            - cancelled
+            - no_show
+            - expired
+        startsAt: &a4
+          type: string
+          format: date-time
+        endsAt: *a4
+        totalDurationMin: *a3
+        totalPricePaise: *a3
+        holdExpiresAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        version: *a3
+        cancelledReason:
+          type:
+            - string
+            - "null"
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              serviceId: *a2
+              name: *a1
+              durationMin: *a3
+              pricePaise: *a3
+        hasReview:
+          type: boolean
+        qrToken:
+          type: string
+          description: Only on customer GET/confirm while status=confirmed
+        createdAt: *a4
+    Invoice:
+      type: object
+      properties:
+        id: *a2
+        salonId: *a2
+        bookingId:
+          type:
+            - string
+            - "null"
+        invoiceNo: *a1
+        customerName: *a1
+        customerPhone:
+          type:
+            - string
+            - "null"
+        subtotalPaise: *a3
+        discountPaise: *a3
+        taxPaise: *a3
+        taxLabel:
+          type:
+            - string
+            - "null"
+        totalPaise: *a3
+        status:
+          enum:
+            - draft
+            - paid
+            - void
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              serviceId:
+                type:
+                  - string
+                  - "null"
+              name: *a1
+              qty: *a3
+              unitPricePaise: *a3
+              lineTotalPaise: *a3
+        payments:
+          type: array
+          items:
+            type: object
+            properties:
+              methodCode: *a1
+              amountPaise: *a3
+              reference:
+                type:
+                  - string
+                  - "null"
+              paidAt: *a4
+        createdAt: *a4
+    Plan:
+      type: object
+      properties:
+        code: *a1
+        name: *a1
+        priceMonthlyPaise: *a3
+        priceAnnualPaise: *a3
+        maxBranches:
+          type:
+            - integer
+            - "null"
+        maxStaff:
+          type:
+            - integer
+            - "null"
+        customRoles:
+          type: boolean
+        desktopAccess:
+          type: boolean
+        analyticsLevel:
+          enum:
+            - basic
+            - full
+        csvExport:
+          type: boolean
+        billTemplates:
+          type: boolean
+        trialDays: *a3
+    Availability:
+      type: object
+      properties:
+        date: *a1
+        timezone: *a1
+        slots:
+          type: array
+          items:
+            type: object
+            properties:
+              staffId: *a2
+              startsAt: *a4
+              endsAt: *a4
+    CheckoutResult:
+      type: object
+      properties:
+        razorpaySubscriptionId: *a1
+        keyId: *a1
+    MediaId:
+      type: object
+      properties:
+        id: *a2
+    Hairstyle:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Hairstyle
+    ServiceTemplate:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of ServiceTemplate
+    Permission:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Permission
+    MeResult:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of MeResult
+    SalonSummary:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of SalonSummary
+    SalonDetail:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of SalonDetail
+    Review:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Review
+    Salon:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Salon
+    Hours:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Hours
+    Closure:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Closure
+    Service:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Service
+    ServiceIds:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of ServiceIds
+    Staff:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Staff
+    StaffHours:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of StaffHours
+    TimeOff:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of TimeOff
+    Role:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Role
+    PaymentMethod:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of PaymentMethod
+    AnalyticsSummary:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of AnalyticsSummary
+    Customer:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Customer
+    CustomerDetail:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of CustomerDetail
+    SubscriptionView:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of SubscriptionView
+    Receipt:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Receipt
+    AdminSalon:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of AdminSalon
+    ContactMessage:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of ContactMessage
+    AdminUser:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of AdminUser
+    AdminStats:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of AdminStats
+    AuditEntry:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of AuditEntry
+    Lead:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Lead
+    Invite:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Invite
+    Pipeline:
+      type: object
+      additionalProperties: true
+      description: See spec §6 for the shape of Pipeline
+paths:
+  /plans:
+    get:
+      tags:
+        - Public
+      summary: Public plans and prices
+      operationId: get_plans
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Plan"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: &a5
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security: []
+  /contact:
+    post:
+      tags:
+        - Public
+      summary: Website contact form
+      description: Honeypot field `website` must be empty; bots get a silent 201
+      operationId: post_contact
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                phone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                salonName:
+                  type: string
+                  maxLength: 120
+                message:
+                  type: string
+                  minLength: 5
+                  maxLength: 4000
+                website:
+                  type: string
+                  maxLength: 500
+              required:
+                - name
+                - email
+                - message
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /hairstyles:
+    get:
+      tags:
+        - Hairstyles
+      summary: Hairstyle catalog
+      operationId: get_hairstyles
+      parameters:
+        - name: faceShape
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: audience
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - men
+              - women
+              - unisex
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Hairstyle"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /hairstyles/{id}:
+    get:
+      tags:
+        - Hairstyles
+      summary: One hairstyle
+      operationId: get_hairstyles_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Hairstyle"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /service-templates:
+    get:
+      tags:
+        - Services
+      summary: Starter service catalog
+      operationId: get_service_templates
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceTemplate"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /permissions:
+    get:
+      tags:
+        - Roles
+      summary: All permission keys
+      operationId: get_permissions
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Permission"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /invites/{code}:
+    get:
+      tags:
+        - Public
+      summary: Look up a sales invite (prefills the register page)
+      operationId: get_invites_code
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      summary: Customer sign-up
+      operationId: post_auth_register
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fullName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                phone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                password:
+                  type: string
+                  pattern: ^(?=.*[A-Za-z])(?=.*\d).{8,128}$
+                deviceLabel:
+                  type: string
+                  maxLength: 100
+                client:
+                  type: string
+                  enum:
+                    - customer_app
+                    - salon_app
+                    - desktop
+                    - website
+              required:
+                - fullName
+                - password
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AuthResult"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /auth/register-owner:
+    post:
+      tags:
+        - Auth
+      summary: Register a salon owner (creates pending salon + 14-day Pro trial)
+      operationId: post_auth_register_owner
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fullName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                phone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                password:
+                  type: string
+                  pattern: ^(?=.*[A-Za-z])(?=.*\d).{8,128}$
+                inviteCode:
+                  type: string
+                  maxLength: 64
+                salon:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 120
+                    city:
+                      type: string
+                      maxLength: 80
+                    state:
+                      type: string
+                      maxLength: 80
+                    addressLine:
+                      type: string
+                      maxLength: 200
+                    pincode:
+                      type: string
+                      maxLength: 12
+                    phone:
+                      type: string
+                      pattern: ^\+[1-9]\d{7,14}$
+                    lat:
+                      type: number
+                      minimum: -90
+                      maximum: 90
+                    lng:
+                      type: number
+                      minimum: -180
+                      maximum: 180
+                    timezone:
+                      type: string
+                    description:
+                      type: string
+                      maxLength: 1000
+                  required:
+                    - name
+                  additionalProperties: false
+              required:
+                - fullName
+                - phone
+                - email
+                - password
+                - salon
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AuthResult"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Log in with phone/email + password
+      description: client=desktop requires the desktop_access entitlement (403 PLAN_LIMIT)
+      operationId: post_auth_login
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                identifier:
+                  type: string
+                  minLength: 1
+                  maxLength: 254
+                password:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                deviceLabel:
+                  type: string
+                  maxLength: 100
+                client:
+                  type: string
+                  enum:
+                    - customer_app
+                    - salon_app
+                    - desktop
+                    - website
+              required:
+                - identifier
+                - password
+                - client
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AuthResult"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /auth/refresh:
+    post:
+      tags:
+        - Auth
+      summary: Rotate the refresh token
+      description: Reusing an already-rotated token revokes the whole session family
+      operationId: post_auth_refresh
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 20
+                  maxLength: 200
+              required:
+                - refreshToken
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AuthTokens"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: Revoke the current session
+      operationId: post_auth_logout
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /auth/logout-all:
+    post:
+      tags:
+        - Auth
+      summary: Revoke every session of the user
+      operationId: post_auth_logout_all
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /auth/change-password:
+    post:
+      tags:
+        - Auth
+      summary: Change password (revokes other sessions)
+      operationId: post_auth_change_password
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currentPassword:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                newPassword:
+                  type: string
+                  pattern: ^(?=.*[A-Za-z])(?=.*\d).{8,128}$
+              required:
+                - currentPassword
+                - newPassword
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /me:
+    get:
+      tags:
+        - Profile
+      summary: Current user profile and salon memberships
+      operationId: get_me
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MeResult"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    patch:
+      tags:
+        - Profile
+      summary: Update profile (name, avatar via media id)
+      operationId: patch_me
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fullName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                avatarMediaId:
+                  anyOf:
+                    - type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    - type: "null"
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/User"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    delete:
+      tags:
+        - Profile
+      summary: Delete (anonymise) a customer account
+      operationId: delete_me
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /me/device-token:
+    post:
+      tags:
+        - Profile
+      summary: Store an FCM device token
+      operationId: post_me_device_token
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  minLength: 1
+                  maxLength: 4096
+                platform:
+                  default: android
+                  type: string
+                  enum:
+                    - android
+                    - ios
+                    - web
+              required:
+                - token
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /media:
+    post:
+      tags:
+        - Media
+      summary: Upload an image (base64, ≤200 KB decoded)
+      description: logo/salon_photo need settings.edit; staff_photo needs staff.manage or settings.edit in that salon
+      operationId: post_media
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - logo
+                    - salon_photo
+                    - avatar
+                    - staff_photo
+                mime:
+                  type: string
+                  enum:
+                    - image/jpeg
+                    - image/png
+                    - image/webp
+                dataBase64:
+                  type: string
+                  minLength: 8
+                  maxLength: 300000
+                salonId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              required:
+                - kind
+                - mime
+                - dataBase64
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MediaId"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /media/{id}:
+    get:
+      tags:
+        - Media
+      summary: Fetch raw image bytes
+      description: Public for logo/salon_photo/staff_photo; avatars need a Bearer token. Supports ETag / If-None-Match.
+      operationId: get_media_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: image/*
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        default: *a5
+      security: []
+    delete:
+      tags:
+        - Media
+      summary: Delete an image you uploaded
+      operationId: delete_media_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /discover/salons:
+    get:
+      tags:
+        - Discover
+      summary: Search nearby salons
+      description: Only approved salons with an active/trialing/past_due subscription. Cursor is opaque (offset based).
+      operationId: get_discover_salons
+      parameters:
+        - name: lat
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: -90
+            maximum: 90
+        - name: lng
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: -180
+            maximum: 180
+        - name: radiusKm
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: 0.1
+            maximum: 500
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 100
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 60
+        - name: templateId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        - name: minRating
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: 0
+            maximum: 5
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - distance
+              - rating
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SalonSummary"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /discover/salons/{salonId}:
+    get:
+      tags:
+        - Discover
+      summary: Public salon profile
+      operationId: get_discover_salons_salonId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SalonDetail"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /discover/salons/{salonId}/reviews:
+    get:
+      tags:
+        - Discover
+      summary: Public reviews of a salon
+      operationId: get_discover_salons_salonId_reviews
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Review"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /salons/{salonId}/availability:
+    get:
+      tags:
+        - Discover
+      summary: Bookable slots for services on a date
+      description: Slots are on a 15-minute grid in the salon timezone; duration = Σ(duration×staff speed rounded up to 5 min)+buffers
+      operationId: get_salons_salonId_availability
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: serviceIds
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: staffId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Availability"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /salons/{salonId}:
+    get:
+      tags:
+        - Salon
+      summary: Salon profile (any member)
+      operationId: get_salons_salonId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Salon"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    patch:
+      tags:
+        - Salon
+      summary: Update salon profile/branding
+      description: Requires salon permission `settings.edit`. billFooter / brandColor need the bill_templates entitlement (Pro)
+      operationId: patch_salons_salonId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                description:
+                  anyOf:
+                    - type: string
+                      maxLength: 2000
+                    - type: "null"
+                phone:
+                  anyOf:
+                    - type: string
+                      pattern: ^\+[1-9]\d{7,14}$
+                    - type: "null"
+                addressLine:
+                  anyOf:
+                    - type: string
+                      maxLength: 200
+                    - type: "null"
+                city:
+                  anyOf:
+                    - type: string
+                      maxLength: 80
+                    - type: "null"
+                state:
+                  anyOf:
+                    - type: string
+                      maxLength: 80
+                    - type: "null"
+                pincode:
+                  anyOf:
+                    - type: string
+                      maxLength: 12
+                    - type: "null"
+                lat:
+                  anyOf:
+                    - type: number
+                      minimum: -90
+                      maximum: 90
+                    - type: "null"
+                lng:
+                  anyOf:
+                    - type: number
+                      minimum: -180
+                      maximum: 180
+                    - type: "null"
+                timezone:
+                  type: string
+                logoMediaId:
+                  anyOf:
+                    - type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    - type: "null"
+                brandColor:
+                  anyOf:
+                    - type: string
+                      pattern: ^#[0-9A-Fa-f]{6}$
+                    - type: "null"
+                billFooter:
+                  anyOf:
+                    - type: string
+                      maxLength: 500
+                    - type: "null"
+                gstin:
+                  anyOf:
+                    - type: string
+                      pattern: ^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$
+                    - type: "null"
+                gstEnabled:
+                  type: boolean
+                invoicePrefix:
+                  type: string
+                  pattern: ^[A-Z0-9]{2,6}$
+                cancelCutoffMin:
+                  type: integer
+                  minimum: 0
+                  maximum: 10080
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Salon"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /salons/{salonId}/hours:
+    get:
+      tags:
+        - Salon
+      summary: Weekly opening hours
+      operationId: get_salons_salonId_hours
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Hours"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    put:
+      tags:
+        - Salon
+      summary: Replace/upsert weekly hours (weekday 0=Sunday)
+      description: Requires salon permission `settings.edit`.
+      operationId: put_salons_salonId_hours
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hours:
+                  minItems: 1
+                  maxItems: 7
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      weekday:
+                        type: integer
+                        minimum: 0
+                        maximum: 6
+                      opens:
+                        default: 10:00
+                        type: string
+                        pattern: ^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$
+                      closes:
+                        default: 20:00
+                        type: string
+                        pattern: ^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$
+                      isClosed:
+                        default: false
+                        type: boolean
+                    required:
+                      - weekday
+                    additionalProperties: false
+              required:
+                - hours
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Hours"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /salons/{salonId}/closures:
+    get:
+      tags:
+        - Salon
+      summary: Closure dates (holidays)
+      operationId: get_salons_salonId_closures
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Closure"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    post:
+      tags:
+        - Salon
+      summary: Add a closure date
+      description: Requires salon permission `settings.edit`.
+      operationId: post_salons_salonId_closures
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                date:
+                  type: string
+                  pattern: ^\d{4}-\d{2}-\d{2}$
+                reason:
+                  type: string
+                  maxLength: 200
+              required:
+                - date
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Closure"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /salons/{salonId}/closures/{closureId}:
+    delete:
+      tags:
+        - Salon
+      summary: Remove a closure date
+      description: Requires salon permission `settings.edit`.
+      operationId: delete_salons_salonId_closures_closureId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: closureId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /salons/{salonId}/services:
+    get:
+      tags:
+        - Services
+      summary: List salon services (incl. inactive)
+      description: Requires salon permission `services.view`.
+      operationId: get_salons_salonId_services
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Service"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: services.view
+    post:
+      tags:
+        - Services
+      summary: Create a service (optionally from a template)
+      description: Requires salon permission `services.edit`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only.
+      operationId: post_salons_salonId_services
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                templateId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                category:
+                  type: string
+                  minLength: 1
+                  maxLength: 60
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                description:
+                  anyOf:
+                    - type: string
+                      maxLength: 1000
+                    - type: "null"
+                audience:
+                  type: string
+                  enum:
+                    - all
+                    - men
+                    - women
+                    - kids
+                durationMin:
+                  type: integer
+                  minimum: 5
+                  maximum: 480
+                bufferMin:
+                  type: integer
+                  minimum: 0
+                  maximum: 120
+                pricePaise:
+                  type: integer
+                  minimum: 0
+                  maximum: 10000000
+                isActive:
+                  type: boolean
+                sort:
+                  type: integer
+                  minimum: 0
+                  maximum: 10000
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Service"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: services.edit
+  /salons/{salonId}/services/{serviceId}:
+    patch:
+      tags:
+        - Services
+      summary: Update a service
+      description: Requires salon permission `services.edit`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only.
+      operationId: patch_salons_salonId_services_serviceId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: serviceId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                category:
+                  type: string
+                  minLength: 1
+                  maxLength: 60
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                description:
+                  anyOf:
+                    - type: string
+                      maxLength: 1000
+                    - type: "null"
+                audience:
+                  type: string
+                  enum:
+                    - all
+                    - men
+                    - women
+                    - kids
+                durationMin:
+                  type: integer
+                  minimum: 5
+                  maximum: 480
+                bufferMin:
+                  type: integer
+                  minimum: 0
+                  maximum: 120
+                pricePaise:
+                  type: integer
+                  minimum: 0
+                  maximum: 10000000
+                isActive:
+                  type: boolean
+                sort:
+                  type: integer
+                  minimum: 0
+                  maximum: 10000
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Service"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: services.edit
+    delete:
+      tags:
+        - Services
+      summary: Delete a service (past bookings keep their snapshots)
+      description: Requires salon permission `services.edit`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only.
+      operationId: delete_salons_salonId_services_serviceId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: serviceId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: services.edit
+  /salons/{salonId}/staff/{staffId}/services:
+    put:
+      tags:
+        - Staff
+      summary: Set which services a staff member performs
+      description: Requires salon permission `staff.manage`. A staff member with no rows performs all services
+      operationId: put_salons_salonId_staff_staffId_services
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                serviceIds:
+                  maxItems: 200
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              required:
+                - serviceIds
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ServiceIds"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/staff:
+    get:
+      tags:
+        - Staff
+      summary: List staff
+      description: Requires salon permission `staff.view`. phone/email only returned with staff.manage
+      operationId: get_salons_salonId_staff
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Staff"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.view
+    post:
+      tags:
+        - Staff
+      summary: Create a staff account (enforces plan max_staff)
+      description: Requires salon permission `staff.manage`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only.
+      operationId: post_salons_salonId_staff
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fullName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                phone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                tempPassword:
+                  type: string
+                  pattern: ^(?=.*[A-Za-z])(?=.*\d).{8,128}$
+                roleId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                speedMultiplier:
+                  type: number
+                  minimum: 0.5
+                  maximum: 2
+                isBookable:
+                  type: boolean
+                serviceIds:
+                  maxItems: 200
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              required:
+                - fullName
+                - tempPassword
+                - roleId
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Staff"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/staff/{staffId}:
+    patch:
+      tags:
+        - Staff
+      summary: Update staff member / change role
+      description: Requires salon permission `staff.manage`.
+      operationId: patch_salons_salonId_staff_staffId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                roleId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                speedMultiplier:
+                  type: number
+                  minimum: 0.5
+                  maximum: 2
+                isBookable:
+                  type: boolean
+                photoMediaId:
+                  anyOf:
+                    - type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    - type: "null"
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Staff"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/staff/{staffId}/deactivate:
+    post:
+      tags:
+        - Staff
+      summary: Deactivate staff (never deleted)
+      description: Requires salon permission `staff.manage`.
+      operationId: post_salons_salonId_staff_staffId_deactivate
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Staff"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/staff/{staffId}/reactivate:
+    post:
+      tags:
+        - Staff
+      summary: Reactivate staff (re-checks max_staff)
+      description: Requires salon permission `staff.manage`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only.
+      operationId: post_salons_salonId_staff_staffId_reactivate
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Staff"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/staff/{staffId}/hours:
+    get:
+      tags:
+        - Staff
+      summary: Staff working-hour overrides
+      description: Requires salon permission `staff.view`.
+      operationId: get_salons_salonId_staff_staffId_hours
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StaffHours"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.view
+    put:
+      tags:
+        - Staff
+      summary: Replace staff hour overrides (empty = use salon hours)
+      description: Requires salon permission `staff.manage`.
+      operationId: put_salons_salonId_staff_staffId_hours
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hours:
+                  maxItems: 7
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      weekday:
+                        type: integer
+                        minimum: 0
+                        maximum: 6
+                      start:
+                        type: string
+                        pattern: ^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$
+                      end:
+                        type: string
+                        pattern: ^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$
+                    required:
+                      - weekday
+                      - start
+                      - end
+                    additionalProperties: false
+              required:
+                - hours
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StaffHours"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/staff/{staffId}/time-off:
+    get:
+      tags:
+        - Staff
+      summary: Upcoming staff time off
+      description: Requires salon permission `staff.view`.
+      operationId: get_salons_salonId_staff_staffId_time_off
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TimeOff"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.view
+    post:
+      tags:
+        - Staff
+      summary: Add staff time off
+      description: Requires salon permission `staff.manage`.
+      operationId: post_salons_salonId_staff_staffId_time_off
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+                to:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+                reason:
+                  type: string
+                  maxLength: 200
+              required:
+                - from
+                - to
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/TimeOff"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/staff/{staffId}/time-off/{timeOffId}:
+    delete:
+      tags:
+        - Staff
+      summary: Remove staff time off
+      description: Requires salon permission `staff.manage`.
+      operationId: delete_salons_salonId_staff_staffId_time_off_timeOffId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: staffId
+          in: path
+          required: true
+          schema: *a2
+        - name: timeOffId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.manage
+  /salons/{salonId}/roles:
+    get:
+      tags:
+        - Roles
+      summary: List roles with permissions
+      description: Requires salon permission `staff.view`.
+      operationId: get_salons_salonId_roles
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Role"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: staff.view
+    post:
+      tags:
+        - Roles
+      summary: Create a custom role
+      description: Requires salon permission `roles.manage`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only. Requires the custom_roles entitlement (Pro)
+      operationId: post_salons_salonId_roles
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 40
+                permissions:
+                  maxItems: 40
+                  type: array
+                  items:
+                    type: string
+              required:
+                - name
+                - permissions
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Role"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: roles.manage
+  /salons/{salonId}/roles/{roleId}:
+    patch:
+      tags:
+        - Roles
+      summary: Edit a role
+      description: Requires salon permission `roles.manage`. Starter cannot edit system role permissions; the owner role is never editable
+      operationId: patch_salons_salonId_roles_roleId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: roleId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 40
+                permissions:
+                  maxItems: 40
+                  type: array
+                  items:
+                    type: string
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Role"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: roles.manage
+    delete:
+      tags:
+        - Roles
+      summary: Delete a custom role
+      description: Requires salon permission `roles.manage`. Requires custom_roles entitlement; system roles and roles with members cannot be deleted
+      operationId: delete_salons_salonId_roles_roleId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: roleId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: roles.manage
+  /bookings/hold:
+    post:
+      tags:
+        - Bookings
+      summary: Hold a slot for 5 minutes
+      description: 409 SLOT_TAKEN when the staff member is already booked/held
+      operationId: post_bookings_hold
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          description: Same key + same body replays the first response; same key + different body is 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                salonId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                staffId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                serviceIds:
+                  minItems: 1
+                  maxItems: 20
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                startsAt:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+              required:
+                - salonId
+                - staffId
+                - serviceIds
+                - startsAt
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /bookings/{id}/confirm:
+    post:
+      tags:
+        - Bookings
+      summary: Confirm a held booking; returns qrToken
+      description: 409 HOLD_EXPIRED when the hold lapsed
+      operationId: post_bookings_id_confirm
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          description: Same key + same body replays the first response; same key + different body is 422.
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /bookings/{id}/cancel:
+    post:
+      tags:
+        - Bookings
+      summary: Customer cancels (≥ cancel_cutoff_min before start)
+      operationId: post_bookings_id_cancel
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 300
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /bookings:
+    get:
+      tags:
+        - Bookings
+      summary: My bookings
+      description: held/expired are hidden unless requested via ?status
+      operationId: get_bookings
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: order
+          in: query
+          required: false
+          schema:
+            default: desc
+            type: string
+            enum:
+              - asc
+              - desc
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /bookings/{id}:
+    get:
+      tags:
+        - Bookings
+      summary: One of my bookings (qrToken while confirmed)
+      operationId: get_bookings_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /bookings/{id}/review:
+    post:
+      tags:
+        - Reviews
+      summary: Review a completed booking
+      operationId: post_bookings_id_review
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                comment:
+                  type: string
+                  maxLength: 1000
+              required:
+                - rating
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Review"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /salons/{salonId}/bookings:
+    get:
+      tags:
+        - Salon bookings
+      summary: Bookings of the salon
+      description: Requires salon permission `booking.view`.
+      operationId: get_salons_salonId_bookings
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+        - name: staffId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: booking.view
+    post:
+      tags:
+        - Salon bookings
+      summary: Create a walk-in booking (confirmed)
+      description: Requires salon permission `booking.create`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only.
+      operationId: post_salons_salonId_bookings
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          description: Same key + same body replays the first response; same key + different body is 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                customerName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                customerPhone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                staffId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                serviceIds:
+                  minItems: 1
+                  maxItems: 20
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                startsAt:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+              required:
+                - customerName
+                - staffId
+                - serviceIds
+                - startsAt
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: booking.create
+  /salons/{salonId}/bookings/{bookingId}:
+    get:
+      tags:
+        - Salon bookings
+      summary: One booking of the salon
+      description: Requires salon permission `booking.view`.
+      operationId: get_salons_salonId_bookings_bookingId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: bookingId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: booking.view
+    patch:
+      tags:
+        - Salon bookings
+      summary: Reschedule (optimistic lock via version)
+      description: Requires salon permission `booking.update`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only. 409 VERSION_MISMATCH when version is stale; rotates the QR nonce
+      operationId: patch_salons_salonId_bookings_bookingId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: bookingId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: integer
+                  minimum: 0
+                  maximum: 9007199254740991
+                startsAt:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+                staffId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              required:
+                - version
+                - startsAt
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: booking.update
+  /salons/{salonId}/bookings/{bookingId}/cancel:
+    post:
+      tags:
+        - Salon bookings
+      summary: Salon cancels a booking
+      description: Requires salon permission `booking.cancel`.
+      operationId: post_salons_salonId_bookings_bookingId_cancel
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: bookingId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 300
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: booking.cancel
+  /salons/{salonId}/bookings/{bookingId}/no-show:
+    post:
+      tags:
+        - Salon bookings
+      summary: Mark a confirmed booking as no-show (after its start time)
+      description: Requires salon permission `booking.update`.
+      operationId: post_salons_salonId_bookings_bookingId_no_show
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: bookingId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: booking.update
+  /salons/{salonId}/bookings/{bookingId}/complete:
+    post:
+      tags:
+        - Salon bookings
+      summary: Mark a booking completed
+      description: Requires salon permission `booking.update`.
+      operationId: post_salons_salonId_bookings_bookingId_complete
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: bookingId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: booking.update
+  /salons/{salonId}/checkin:
+    post:
+      tags:
+        - Salon bookings
+      summary: Check a customer in by QR token (atomic)
+      description: Requires salon permission `checkin.scan`. 409 ALREADY_CHECKED_IN on a second scan; 403 for another salon's QR; 409 OUT_OF_WINDOW outside [start-30m, end+60m]. Works in read-only mode.
+      operationId: post_salons_salonId_checkin
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                qrToken:
+                  type: string
+                  minLength: 10
+                  maxLength: 1024
+              required:
+                - qrToken
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Booking"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: checkin.scan
+  /salons/{salonId}/invoices:
+    post:
+      tags:
+        - Billing
+      summary: Create a bill (totals recomputed server-side, split payments)
+      description: Requires salon permission `billing.create`. Blocked (403 SUBSCRIPTION_INACTIVE) when the salon is read-only. Payment amounts must sum to the total; methods must be enabled for the salon; bookingId marks the booking completed
+      operationId: post_salons_salonId_invoices
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          description: Same key + same body replays the first response; same key + different body is 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bookingId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                customerName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                customerPhone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                items:
+                  minItems: 1
+                  maxItems: 50
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      serviceId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 120
+                      qty:
+                        type: integer
+                        minimum: 1
+                        maximum: 100
+                      unitPricePaise:
+                        type: integer
+                        minimum: 0
+                        maximum: 10000000
+                    required:
+                      - name
+                      - qty
+                      - unitPricePaise
+                    additionalProperties: false
+                discountPaise:
+                  default: 0
+                  type: integer
+                  minimum: 0
+                  maximum: 10000000
+                taxRatePct:
+                  type: number
+                  minimum: 0
+                  maximum: 40
+                payments:
+                  default: []
+                  maxItems: 10
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      methodCode:
+                        type: string
+                        enum:
+                          - cash
+                          - card
+                          - upi
+                          - wallet
+                          - bank_transfer
+                          - other
+                      amountPaise:
+                        type: integer
+                        minimum: 1
+                        maximum: 200000000
+                      reference:
+                        type: string
+                        maxLength: 100
+                    required:
+                      - methodCode
+                      - amountPaise
+                    additionalProperties: false
+              required:
+                - items
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Invoice"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: billing.create
+    get:
+      tags:
+        - Billing
+      summary: List invoices
+      description: Requires salon permission `billing.view`.
+      operationId: get_salons_salonId_invoices
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - draft
+              - paid
+              - void
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 60
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Invoice"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: billing.view
+  /salons/{salonId}/invoices/{invoiceId}:
+    get:
+      tags:
+        - Billing
+      summary: Invoice detail
+      description: Requires salon permission `billing.view`.
+      operationId: get_salons_salonId_invoices_invoiceId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: invoiceId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Invoice"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: billing.view
+  /salons/{salonId}/invoices/{invoiceId}/void:
+    post:
+      tags:
+        - Billing
+      summary: Void an invoice
+      description: Requires salon permission `billing.void`.
+      operationId: post_salons_salonId_invoices_invoiceId_void
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: invoiceId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 300
+              required:
+                - reason
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Invoice"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: billing.void
+  /salons/{salonId}/payment-methods:
+    get:
+      tags:
+        - Billing
+      summary: Payment methods the salon accepts (any member can read)
+      operationId: get_salons_salonId_payment_methods
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PaymentMethod"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    put:
+      tags:
+        - Billing
+      summary: Choose accepted payment methods
+      description: Requires salon permission `payments.configure`.
+      operationId: put_salons_salonId_payment_methods
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                methods:
+                  minItems: 1
+                  maxItems: 6
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                        enum:
+                          - cash
+                          - card
+                          - upi
+                          - wallet
+                          - bank_transfer
+                          - other
+                      label:
+                        type: string
+                        minLength: 1
+                        maxLength: 40
+                      isEnabled:
+                        type: boolean
+                      upiId:
+                        anyOf:
+                          - type: string
+                            pattern: ^[\w.\-]{2,}@[A-Za-z]{2,}$
+                          - type: "null"
+                    required:
+                      - code
+                      - isEnabled
+                    additionalProperties: false
+              required:
+                - methods
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PaymentMethod"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: payments.configure
+  /salons/{salonId}/reviews:
+    get:
+      tags:
+        - Reviews
+      summary: Reviews of this salon (any member)
+      operationId: get_salons_salonId_reviews
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Review"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /salons/{salonId}/reviews/{reviewId}/reply:
+    post:
+      tags:
+        - Reviews
+      summary: Reply to a review (replaces an earlier reply)
+      description: Requires salon permission `reviews.reply`.
+      operationId: post_salons_salonId_reviews_reviewId_reply
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: reviewId
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                replyText:
+                  type: string
+                  minLength: 1
+                  maxLength: 1000
+              required:
+                - replyText
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Review"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: reviews.reply
+  /reviews/{id}/report:
+    post:
+      tags:
+        - Reviews
+      summary: Report a review to the Trim team
+      operationId: post_reviews_id_report
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 300
+              required:
+                - reason
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /salons/{salonId}/analytics/summary:
+    get:
+      tags:
+        - Analytics
+      summary: Analytics summary (basic or full by plan)
+      description: Requires salon permission `analytics.view`. Dates are salon-local calendar dates (default last 30 days). `full` level adds per-service, per-staff, heat map, repeat rate and daily series.
+      operationId: get_salons_salonId_analytics_summary
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AnalyticsSummary"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: analytics.view
+  /salons/{salonId}/analytics/export.csv:
+    get:
+      tags:
+        - Analytics
+      summary: CSV export of invoices in range
+      description: Requires salon permission `analytics.view`. Requires the csv_export entitlement (Pro). Allowed in read-only mode.
+      operationId: get_salons_salonId_analytics_export_csv
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+      responses:
+        "200":
+          description: text/csv
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        default: *a5
+      x-permission: analytics.view
+  /salons/{salonId}/customers:
+    get:
+      tags:
+        - Customers
+      summary: Customers derived from bookings and invoices
+      description: Requires salon permission `customers.view`.
+      operationId: get_salons_salonId_customers
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 60
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Customer"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: customers.view
+  /salons/{salonId}/customers/{customerKey}:
+    get:
+      tags:
+        - Customers
+      summary: Customer detail with history (key = id from the list, URL-encoded)
+      description: Requires salon permission `customers.view`.
+      operationId: get_salons_salonId_customers_customerKey
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: customerKey
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CustomerDetail"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: customers.view
+  /salons/{salonId}/subscription:
+    get:
+      tags:
+        - Subscription
+      summary: Subscription status, limits, usage
+      description: Requires salon permission `settings.edit`. Salon owner only.
+      operationId: get_salons_salonId_subscription
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SubscriptionView"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /salons/{salonId}/subscription/checkout:
+    post:
+      tags:
+        - Subscription
+      summary: Create a Razorpay subscription for Checkout
+      description: Requires salon permission `settings.edit`. Salon owner only. The client opens Razorpay Checkout with the returned id/key, then polls GET subscription. The webhook is the source of truth.
+      operationId: post_salons_salonId_subscription_checkout
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+          description: Same key + same body replays the first response; same key + different body is 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                planCode:
+                  type: string
+                  enum:
+                    - starter
+                    - pro
+                interval:
+                  type: string
+                  enum:
+                    - monthly
+                    - annual
+              required:
+                - planCode
+                - interval
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CheckoutResult"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /salons/{salonId}/subscription/cancel:
+    post:
+      tags:
+        - Subscription
+      summary: Cancel at period end
+      description: Requires salon permission `settings.edit`. Salon owner only.
+      operationId: post_salons_salonId_subscription_cancel
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SubscriptionView"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /salons/{salonId}/subscription/receipts:
+    get:
+      tags:
+        - Subscription
+      summary: Subscription receipts (plain receipts, not tax invoices)
+      description: Requires salon permission `settings.edit`. Salon owner only.
+      operationId: get_salons_salonId_subscription_receipts
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema: *a2
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Receipt"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      x-permission: settings.edit
+  /webhooks/razorpay:
+    post:
+      tags:
+        - Webhooks
+      summary: Razorpay webhook (signature verified, idempotent)
+      description: Header X-Razorpay-Signature = HMAC-SHA256(raw body, RAZORPAY_WEBHOOK_SECRET); X-Razorpay-Event-Id dedupes replays
+      operationId: post_webhooks_razorpay
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+      security: []
+  /admin/salons:
+    get:
+      tags:
+        - Admin
+      summary: List salons (approval queue)
+      operationId: get_admin_salons
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - pending
+              - approved
+              - suspended
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 80
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AdminSalon"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/salons/{id}:
+    get:
+      tags:
+        - Admin
+      summary: Salon detail for review
+      operationId: get_admin_salons_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AdminSalon"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    patch:
+      tags:
+        - Admin
+      summary: Approve / suspend a salon
+      operationId: patch_admin_salons_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - pending
+                    - approved
+                    - suspended
+              required:
+                - status
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Salon"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/plans:
+    get:
+      tags:
+        - Admin
+      summary: All plans including inactive
+      operationId: get_admin_plans
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Plan"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/plans/{code}:
+    patch:
+      tags:
+        - Admin
+      summary: Edit plan prices / limits
+      description: Changing a price clears the matching razorpay_plan_id (Razorpay plans are immutable) so scripts/create-razorpay-plans.ts can recreate it
+      operationId: patch_admin_plans_code
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: *a1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 40
+                priceMonthlyPaise:
+                  type: integer
+                  minimum: 0
+                  maximum: 100000000
+                priceAnnualPaise:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000000000
+                maxBranches:
+                  anyOf:
+                    - type: integer
+                      minimum: 1
+                      maximum: 100
+                    - type: "null"
+                maxStaff:
+                  anyOf:
+                    - type: integer
+                      minimum: 1
+                      maximum: 10000
+                    - type: "null"
+                customRoles:
+                  type: boolean
+                desktopAccess:
+                  type: boolean
+                analyticsLevel:
+                  type: string
+                  enum:
+                    - basic
+                    - full
+                csvExport:
+                  type: boolean
+                billTemplates:
+                  type: boolean
+                isActive:
+                  type: boolean
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Plan"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/salons/{id}/comp:
+    post:
+      tags:
+        - Admin
+      summary: Grant/extend complimentary access until a date (null clears)
+      operationId: post_admin_salons_id_comp
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                until:
+                  anyOf:
+                    - type: string
+                      format: date-time
+                      pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+                    - type: "null"
+              required:
+                - until
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AdminSalon"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/contact-messages:
+    get:
+      tags:
+        - Admin
+      summary: Contact inbox
+      operationId: get_admin_contact_messages
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - new
+              - handled
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ContactMessage"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/contact-messages/{id}:
+    patch:
+      tags:
+        - Admin
+      summary: Mark handled / assign
+      operationId: patch_admin_contact_messages_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - new
+                    - handled
+                assignedTo:
+                  anyOf:
+                    - type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    - type: "null"
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ContactMessage"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/users:
+    get:
+      tags:
+        - Admin
+      summary: Users
+      operationId: get_admin_users
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 80
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - customer
+              - salon_user
+              - admin
+              - sales_agent
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AdminUser"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/sales-agents:
+    post:
+      tags:
+        - Admin
+      summary: Create a sales agent account
+      operationId: post_admin_sales_agents
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fullName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                phone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                password:
+                  type: string
+                  pattern: ^(?=.*[A-Za-z])(?=.*\d).{8,128}$
+              required:
+                - fullName
+                - email
+                - password
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AdminUser"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/users/{id}:
+    patch:
+      tags:
+        - Admin
+      summary: Activate / deactivate a user (sales agents and others)
+      operationId: patch_admin_users_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                isActive:
+                  type: boolean
+              required:
+                - isActive
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AdminUser"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/stats:
+    get:
+      tags:
+        - Admin
+      summary: Platform counters
+      operationId: get_admin_stats
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AdminStats"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/audit:
+    get:
+      tags:
+        - Admin
+      summary: Audit log
+      operationId: get_admin_audit
+      parameters:
+        - name: salonId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 80
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 50
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEntry"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/reviews/{id}:
+    patch:
+      tags:
+        - Admin
+      summary: Hide / restore a review
+      operationId: patch_admin_reviews_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - visible
+                    - hidden
+              required:
+                - status
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/hairstyles:
+    post:
+      tags:
+        - Admin
+      summary: Add a hairstyle
+      operationId: post_admin_hairstyles
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                audience:
+                  type: string
+                  enum:
+                    - men
+                    - women
+                    - unisex
+                faceShapes:
+                  minItems: 1
+                  maxItems: 5
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - Heart
+                      - Oblong
+                      - Oval
+                      - Round
+                      - Square
+                length:
+                  type: string
+                  enum:
+                    - short
+                    - medium
+                    - long
+                description:
+                  type: string
+                  minLength: 1
+                  maxLength: 600
+                tags:
+                  default: []
+                  maxItems: 15
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 30
+                maintenance:
+                  default: medium
+                  type: string
+                  enum:
+                    - low
+                    - medium
+                    - high
+                imageMediaId:
+                  anyOf:
+                    - type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    - type: "null"
+                serviceTemplateIds:
+                  maxItems: 20
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              required:
+                - name
+                - audience
+                - faceShapes
+                - length
+                - description
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Hairstyle"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /admin/hairstyles/{id}:
+    patch:
+      tags:
+        - Admin
+      summary: Edit a hairstyle
+      operationId: patch_admin_hairstyles_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                audience:
+                  type: string
+                  enum:
+                    - men
+                    - women
+                    - unisex
+                faceShapes:
+                  minItems: 1
+                  maxItems: 5
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - Heart
+                      - Oblong
+                      - Oval
+                      - Round
+                      - Square
+                length:
+                  type: string
+                  enum:
+                    - short
+                    - medium
+                    - long
+                description:
+                  type: string
+                  minLength: 1
+                  maxLength: 600
+                tags:
+                  default: []
+                  maxItems: 15
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 30
+                maintenance:
+                  default: medium
+                  type: string
+                  enum:
+                    - low
+                    - medium
+                    - high
+                imageMediaId:
+                  anyOf:
+                    - type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    - type: "null"
+                serviceTemplateIds:
+                  maxItems: 20
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Hairstyle"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    delete:
+      tags:
+        - Admin
+      summary: Remove a hairstyle
+      operationId: delete_admin_hairstyles_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /sales/leads:
+    get:
+      tags:
+        - Sales
+      summary: "List leads (agents: own only)"
+      operationId: get_sales_leads
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+        - name: stage
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - new
+              - contacted
+              - trial
+              - subscribed
+              - lost
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 80
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Lead"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    post:
+      tags:
+        - Sales
+      summary: Create a lead
+      operationId: post_sales_leads
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                salonName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                ownerName:
+                  type: string
+                  maxLength: 120
+                phone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                city:
+                  type: string
+                  maxLength: 80
+                source:
+                  type: string
+                  maxLength: 60
+                stage:
+                  type: string
+                  enum:
+                    - new
+                    - contacted
+                    - trial
+                    - subscribed
+                    - lost
+                notes:
+                  type: string
+                  maxLength: 4000
+                ownerAgentId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              required:
+                - salonName
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Lead"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /sales/leads/{id}:
+    get:
+      tags:
+        - Sales
+      summary: Lead detail
+      operationId: get_sales_leads_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Lead"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    patch:
+      tags:
+        - Sales
+      summary: Update a lead
+      operationId: patch_sales_leads_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                salonName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                ownerName:
+                  type: string
+                  maxLength: 120
+                phone:
+                  type: string
+                  pattern: ^\+[1-9]\d{7,14}$
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                city:
+                  type: string
+                  maxLength: 80
+                source:
+                  type: string
+                  maxLength: 60
+                stage:
+                  type: string
+                  enum:
+                    - new
+                    - contacted
+                    - trial
+                    - subscribed
+                    - lost
+                notes:
+                  type: string
+                  maxLength: 4000
+                ownerAgentId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Lead"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+    delete:
+      tags:
+        - Sales
+      summary: Delete a lead
+      operationId: delete_sales_leads_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /sales/leads/{id}/invite:
+    post:
+      tags:
+        - Sales
+      summary: Create a salon-owner invite code for the website register page
+      operationId: post_sales_leads_id_invite
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: *a2
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Invite"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /sales/pipeline:
+    get:
+      tags:
+        - Sales
+      summary: Lead counts per stage
+      operationId: get_sales_pipeline
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Pipeline"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default: *a5
+  /health:
+    get:
+      tags:
+        - Ops
+      summary: Liveness + DB ping (served at /health, outside /v1)
+      operationId: get_health
+      servers:
+        - url: /
+      security: []
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: *a1
+                  db: *a1
+                  version: *a1
+                  uptimeSec: *a3
+                  time: *a4
+        "503":
+          description: database down
