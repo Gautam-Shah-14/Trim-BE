@@ -1,0 +1,26 @@
+# Keeps the free tiers awake (Render sleeps, Supabase pauses after ~1 week of inactivity).
+# Needs repository secrets: API_BASE_URL (e.g. https://trim-api.onrender.com) and DATABASE_URL.
+# Only runs once the repo is pushed to GitHub. Remove the DB step if you do not want Actions to hold the DB URL.
+name: keepalive
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping API /health (wakes Render, which pings the DB)
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+        run: |
+          test -n "$API_BASE_URL" || { echo "API_BASE_URL secret missing"; exit 1; }
+          curl --fail --silent --show-error --retry 5 --retry-delay 20 --max-time 90 "$API_BASE_URL/health"
+      - name: Ping database directly (counts as Supabase activity)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL" || { echo "DATABASE_URL secret missing, skipping"; exit 0; }
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "select 1 as alive"

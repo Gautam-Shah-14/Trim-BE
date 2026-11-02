@@ -1,0 +1,25 @@
+name: ci
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      # Tests start a real PostgreSQL via embedded-postgres (btree_gist exclusion constraint is exercised). No secrets needed.
+      - run: npm test
+      - name: openapi.yaml is up to date
+        run: |
+          npm run openapi
+          git diff --exit-code openapi.yaml
