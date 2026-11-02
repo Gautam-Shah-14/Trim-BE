@@ -180,7 +180,7 @@ export function register(api: Api) {
     } catch (err) {
       throw conflictFromUnique(err) ?? err;
     }
-  }, [authLimiter(30)]);
+  }, [authLimiter(Math.max(5, Math.round(config.rateLimit.generalPerMin / 10)))]);
 
   api.post('/auth/register-owner', { summary: 'Register a salon owner (creates pending salon + 14-day Pro trial)', tag: 'Auth', auth: 'none', body: ownerSchema, returns: 'AuthResult', status: 201 }, async (req, res) => {
     const b = parse(ownerSchema, req.body);
@@ -211,7 +211,7 @@ export function register(api: Api) {
     } catch (err) {
       throw conflictFromUnique(err) ?? err;
     }
-  }, [authLimiter(30)]);
+  }, [authLimiter(Math.max(5, Math.round(config.rateLimit.generalPerMin / 10)))]);
 
   api.post('/auth/login', { summary: 'Log in with phone/email + password', tag: 'Auth', auth: 'none', body: loginSchema, returns: 'AuthResult', note: 'client=desktop requires the desktop_access entitlement (403 PLAN_LIMIT)' }, async (req, res) => {
     const b = parse(loginSchema, req.body);
@@ -287,7 +287,7 @@ export function register(api: Api) {
       throw result.err;
     }
     send(res, { accessToken: result.tokens.accessToken, refreshToken: result.tokens.refreshToken, expiresIn: result.tokens.expiresIn });
-  }, [authLimiter(60)]);
+  }, [authLimiter(Math.max(10, Math.round(config.rateLimit.generalPerMin / 5)))]);
 
   api.post('/auth/logout', { summary: 'Revoke the current session', tag: 'Auth', auth: 'user' }, async (req, res) => {
     await deps.pool.query('UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL', [req.auth!.sessionId]);

@@ -31,7 +31,7 @@ const listQuery = pageQuery.extend({
 });
 const methodsSchema = z.strictObject({
   methods: z
-    .array(z.strictObject({ code: z.enum(METHOD_CODES), label: str(40).optional(), isEnabled: z.boolean(), upiId: z.string().trim().regex(/^[\w.\-]{2,}@[A-Za-z]{2,}$/, 'invalid UPI id').nullable().optional() }))
+    .array(z.strictObject({ code: z.enum(METHOD_CODES), label: str(40).optional(), isEnabled: z.boolean(), upiId: z.string().trim().regex(/^[\w.-]{2,}@[A-Za-z]{2,}$/, 'invalid UPI id').nullable().optional() }))
     .min(1)
     .max(6),
 });

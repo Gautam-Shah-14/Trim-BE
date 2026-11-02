@@ -39,7 +39,7 @@ export function register(api: Api) {
     const sort = q.sort ?? (hasGeo ? 'distance' : 'rating');
     if (sort === 'distance' && !hasGeo) throw E.validation('sort=distance needs lat and lng', [{ field: 'sort', issue: 'requires lat/lng' }]);
     const offset = decodeCursor<{ o: number }>(q.cursor)?.o ?? 0;
-    const params: unknown[] = [q.lat ?? null, q.lng ?? null];
+    const params: unknown[] = hasGeo ? [q.lat, q.lng] : [];
     const where: string[] = [`s.status = 'approved'`, DISCOVERABLE_SQL];
     if (hasGeo) {
       params.push(q.radiusKm ?? 25);

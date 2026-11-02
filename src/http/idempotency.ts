@@ -10,6 +10,7 @@ export interface Replayable {
 const KEY_RE = /^[A-Za-z0-9_-]{8,128}$/;
 
 function stable(v: unknown): string {
+  if (v instanceof Date) return JSON.stringify(v.toISOString());
   if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`;
   if (v && typeof v === 'object') {
     return `{${Object.keys(v as object)

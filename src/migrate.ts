@@ -30,7 +30,7 @@ export async function runMigrations(pool: pg.Pool, dir = defaultMigrationsDir(),
         await client.query('COMMIT');
       } catch (err) {
         await client.query('ROLLBACK');
-        throw new Error(`Migration ${f} failed: ${(err as Error).message}`);
+        throw new Error(`Migration ${f} failed: ${(err as Error).message}`, { cause: err });
       }
       applied.push(f);
       log(`applied ${f}`);

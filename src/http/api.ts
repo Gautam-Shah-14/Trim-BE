@@ -96,7 +96,7 @@ export const loadSalon: RequestHandler = async (req, _res, next) => {
 
   let staffId: string | null = null;
   let roleName: string | null = null;
-  let permissions = new Set<Permission>();
+  let permissions: Set<Permission>;
   let isOwner = false;
   if (auth.role === 'admin') {
     permissions = new Set(ALL_PERMISSIONS);

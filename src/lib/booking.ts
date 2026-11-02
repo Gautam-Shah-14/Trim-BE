@@ -100,11 +100,9 @@ export async function planBooking(db: Queryable, salonId: string, staffId: strin
 export async function assertWithinWorkingTime(db: Queryable, salonId: string, tz: string, staffId: string, startMs: number, endMs: number): Promise<void> {
   const date = localDateOf(startMs, tz);
   const wd = weekdayOf(date);
-  const [h, closure, sh] = await Promise.all([
-    db.query<{ opens: string; closes: string; is_closed: boolean }>('SELECT opens, closes, is_closed FROM salon_hours WHERE salon_id = $1 AND weekday = $2', [salonId, wd]),
-    db.query('SELECT 1 FROM salon_closures WHERE salon_id = $1 AND date = $2::date', [salonId, date]),
-    db.query<{ start_time: string; end_time: string }>('SELECT start_time, end_time FROM staff_hours WHERE staff_id = $1 AND weekday = $2', [staffId, wd]),
-  ]);
+  const h = await db.query<{ opens: string; closes: string; is_closed: boolean }>('SELECT opens, closes, is_closed FROM salon_hours WHERE salon_id = $1 AND weekday = $2', [salonId, wd]);
+  const closure = await db.query('SELECT 1 FROM salon_closures WHERE salon_id = $1 AND date = $2::date', [salonId, date]);
+  const sh = await db.query<{ start_time: string; end_time: string }>('SELECT start_time, end_time FROM staff_hours WHERE staff_id = $1 AND weekday = $2', [staffId, wd]);
   const hr = h.rows[0];
   const windows = workingWindows({
     date,

@@ -87,7 +87,7 @@ export function register(api: Api) {
           await insertItems(c, ins.rows[0]!.id, plan.items);
           return ins.rows[0]!.id;
         } catch (err) {
-          if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
+          if ((isPgError(err, '23P01') || isPgError(err, '40P01'))) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
           throw err;
         }
       });
@@ -252,7 +252,7 @@ export function register(api: Api) {
           await insertItems(c, ins.rows[0]!.id, plan.items);
           return ins.rows[0]!.id;
         } catch (err) {
-          if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
+          if ((isPgError(err, '23P01') || isPgError(err, '40P01'))) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
           throw err;
         }
       });
@@ -297,7 +297,7 @@ export function register(api: Api) {
         await c.query('DELETE FROM booking_items WHERE booking_id = $1', [id]);
         await insertItems(c, id, plan.items);
       } catch (err) {
-        if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
+        if ((isPgError(err, '23P01') || isPgError(err, '40P01'))) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
         throw err;
       }
     });
