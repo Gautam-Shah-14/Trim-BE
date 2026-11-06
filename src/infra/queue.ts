@@ -146,7 +146,9 @@ export class PgBossQueue implements JobQueue {
     for (const [name, h] of this.handlers) {
       await this.boss.createQueue(name).catch(() => {}); // already exists
       if (consume) {
-        await this.boss.work(name, { pollingIntervalSeconds: 2 } as any, async (jobs: any[]) => {
+        // 0.5 s polling, batches of 10, two local workers, continuous fetching while batches come back full (~20 events drain in a few seconds).
+        // Handlers are idempotent and lock the rows they change, so parallel workers are safe.
+        await this.boss.work(name, { pollingIntervalSeconds: 0.5, batchSize: 10, localConcurrency: 2, burstWhenBatchFull: true } as any, async (jobs: any[]) => {
           for (const j of jobs) await h(j.data ?? {});
         });
       }

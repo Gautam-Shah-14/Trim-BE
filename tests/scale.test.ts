@@ -364,7 +364,7 @@ describe('rollups and asynchronous exports (spec 11.6, 11.7)', () => {
     expect(small.status).toBe(200);
     expect(small.body).toContain('invoice_no');
     // > 92 days => 202 + job
-    const bigRange = await call(ctx, 'GET', `/v1/salons/${o.salonId}/analytics/export.csv?from=${d(-200)}&to=${d(0)}`, { token: o.token });
+    const bigRange = await call(ctx, 'GET', `/v1/salons/${o.salonId}/analytics/export.csv?from=${addDays(localDateOf(Date.now(), tz), -200)}&to=${localDateOf(Date.now(), tz)}`, { token: o.token });
     expect(bigRange.status).toBe(202);
     const jobId = bigRange.body.data.jobId as string;
     await ctx.deps.queue.drain();

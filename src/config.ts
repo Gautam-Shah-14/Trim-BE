@@ -37,6 +37,7 @@ const envSchema = z.object({
   WORKER_MODE: z.enum(['api', 'worker', 'both']).default('both'),
   METRICS_ENABLED: bool.default(true),
   METRICS_TOKEN: z.string().default(''),
+  BFF_SHARED_SECRET: z.string().default('').refine((v) => v === '' || v.length >= 24, 'BFF_SHARED_SECRET must be at least 24 characters when set'),
   LOAD_SHED_LAG_MS: z.coerce.number().int().min(0).default(500),
   LOAD_SHED_POOL_WAITING: z.coerce.number().int().min(0).default(50),
   RATE_LIMIT_REGISTER_PER_HOUR: z.coerce.number().int().min(1).default(5),
@@ -83,6 +84,7 @@ export interface Config {
   queue: { enabled: boolean; driver: 'pgboss' | 'memory'; maxDepth: number };
   workerMode: 'api' | 'worker' | 'both';
   metrics: { enabled: boolean; token: string };
+  bffSharedSecret: string;
   loadShed: { lagMs: number; poolWaiting: number };
   caps: { maxHeld: number; maxUpcoming: number; maxPerDay: number };
   jwtSecret: string;
@@ -112,6 +114,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (missing.length) {
       throw new ConfigError(`Invalid environment configuration: missing in production: ${missing.join(', ')}. See .env.example.`);
     }
+    if (e.METRICS_ENABLED && !e.METRICS_TOKEN) {
+      throw new ConfigError('Invalid environment configuration: METRICS_TOKEN is required in production while METRICS_ENABLED=true (or set METRICS_ENABLED=false). See .env.example.');
+    }
   }
   if ((e.CACHE_DRIVER === 'redis' || e.RATE_LIMIT_DRIVER === 'redis') && !e.REDIS_URL) {
     throw new ConfigError(['Invalid environment configuration:', '  - REDIS_URL: required when CACHE_DRIVER or RATE_LIMIT_DRIVER is redis. See .env.example.'].join('\n'));
@@ -139,6 +144,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     queue: { enabled: e.QUEUE_ENABLED, driver: e.QUEUE_DRIVER, maxDepth: e.QUEUE_MAX_DEPTH },
     workerMode: e.WORKER_MODE,
     metrics: { enabled: e.METRICS_ENABLED, token: e.METRICS_TOKEN },
+    bffSharedSecret: e.BFF_SHARED_SECRET,
     loadShed: { lagMs: e.LOAD_SHED_LAG_MS, poolWaiting: e.LOAD_SHED_POOL_WAITING },
     caps: { maxHeld: e.MAX_HELD_PER_CUSTOMER, maxUpcoming: e.MAX_UPCOMING_PER_CUSTOMER, maxPerDay: e.MAX_BOOKINGS_PER_DAY },
     jwtSecret: e.JWT_SECRET,

@@ -227,7 +227,9 @@ export function register(api: Api) {
       throw E.unauth('Invalid credentials');
     }
     if (u.locked_until && u.locked_until.getTime() > Date.now()) {
-      throw new AppError('RATE_LIMITED', 'Account temporarily locked after too many failed attempts', { lockedUntil: u.locked_until.toISOString() });
+      const retryAfterSec = Math.max(1, Math.ceil((u.locked_until.getTime() - Date.now()) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSec));
+      throw new AppError('RATE_LIMITED', 'Account temporarily locked after too many failed attempts', { lockedUntil: u.locked_until.toISOString(), retryAfterSec });
     }
     const ok = await deps.hasher.verify(u.password_hash, b.password);
     if (!ok) {

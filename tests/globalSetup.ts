@@ -37,7 +37,7 @@ export default async function setup(project: TestProject) {
   const port = await freePort();
   const password = randomBytes(12).toString('hex'); // throwaway, generated per run
   const dir = mkdtempSync(path.join(os.tmpdir(), 'trim-pg-'));
-  pgServer = new EmbeddedPostgres({ databaseDir: dir, user: 'postgres', password, port, persistent: false, postgresFlags: ['-c', 'fsync=off', '-c', 'synchronous_commit=off', '-c', 'full_page_writes=off', '-c', 'max_connections=200'], onLog: () => {}, onError: () => {} });
+  pgServer = new EmbeddedPostgres({ databaseDir: dir, user: 'postgres', password, port, persistent: false, initdbFlags: ['--encoding=UTF8'], postgresFlags: ['-c', 'fsync=off', '-c', 'synchronous_commit=off', '-c', 'full_page_writes=off', '-c', 'max_connections=200'], onLog: () => {}, onError: () => {} });
   await pgServer.initialise();
   await pgServer.start();
   await pgServer.createDatabase('trim_template');

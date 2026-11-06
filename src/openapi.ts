@@ -16,7 +16,7 @@ const SCHEMAS: Record<string, Json> = {
     {
       error: obj(
         {
-          code: { type: 'string', enum: ['VALIDATION_FAILED', 'UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'SLOT_TAKEN', 'HOLD_EXPIRED', 'ALREADY_CHECKED_IN', 'VERSION_MISMATCH', 'OUT_OF_WINDOW', 'PLAN_LIMIT', 'SUBSCRIPTION_INACTIVE', 'RATE_LIMITED', 'OVERLOADED', 'TIMEOUT', 'INTERNAL'] },
+          code: { type: 'string', enum: ['VALIDATION_FAILED', 'UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'SLOT_TAKEN', 'HOLD_EXPIRED', 'ALREADY_CHECKED_IN', 'VERSION_MISMATCH', 'OUT_OF_WINDOW', 'PLAN_LIMIT', 'SUBSCRIPTION_INACTIVE', 'RATE_LIMITED', 'OVERLOADED', 'UPSTREAM_ERROR', 'METHOD_NOT_ALLOWED', 'TIMEOUT', 'INTERNAL'] },
           message: str,
           details: { description: 'Array of {field, issue} for VALIDATION_FAILED; object (e.g. {limit}) for PLAN_LIMIT', oneOf: [{ type: 'array', items: obj({ field: str, issue: str }) }, { type: 'object' }] },
           reason: { type: 'string', description: 'Stable machine-readable sub-reason for CONFLICT/FORBIDDEN (see x-error-reasons). For a missing salon permission it is the permission key, e.g. billing.void.', enum: [...Object.keys(ERROR_REASONS), 'booking.view', 'booking.create', 'booking.update', 'booking.cancel', 'checkin.scan', 'billing.view', 'billing.create', 'billing.void', 'services.view', 'services.edit', 'staff.view', 'staff.manage', 'roles.manage', 'analytics.view', 'settings.edit', 'payments.configure', 'reviews.reply', 'customers.view'] },

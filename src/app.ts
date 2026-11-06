@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import cors from 'cors';
 import express, { type ErrorRequestHandler, type Express, Router } from 'express';
 import helmet from 'helmet';
@@ -16,6 +16,8 @@ import type { JobQueue } from './infra/queue.js';
 import { loadShedder } from './infra/resilience.js';
 import { registerJobs } from './jobs/index.js';
 import { generalLimiter } from './http/rateLimit.js';
+import { bffClientIp } from './http/clientIp.js';
+import { rejectNulBytes } from './http/sanitize.js';
 import type { Deps } from './http/types.js';
 import { createRazorpayGateway, type PaymentGateway } from './lib/gateway.js';
 import { makePasswordHasher } from './lib/security.js';
@@ -38,6 +40,12 @@ import * as subscription from './modules/subscription.js';
 import * as webhooks from './modules/webhooks.js';
 
 const VERSION = '0.1.0';
+
+const safeEqual = (a: string, b: string) => {
+  const x = createHash('sha256').update(a).digest();
+  const y = createHash('sha256').update(b).digest();
+  return timingSafeEqual(x, y);
+};
 
 export interface CreateAppOptions {
   config: Config;
@@ -98,6 +106,7 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
     req.deps = deps;
     next();
   });
+  app.use(bffClientIp(config.bffSharedSecret)); // authenticated website client IP (D-01)
   app.use((req, res, next) => {
     const t0 = process.hrtime.bigint();
     const timer = setTimeout(() => {
@@ -139,6 +148,7 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
   app.use('/v1/webhooks/razorpay', express.raw({ type: '*/*', limit: '1mb' }));
   app.use('/v1/media', express.json({ limit: `${config.mediaBodyLimitKb}kb` }));
   app.use(express.json({ limit: `${config.bodyLimitKb}kb` }));
+  app.use(rejectNulBytes);
   app.use(shed.mw);
 
   app.get('/health', async (_req, res) => {
@@ -169,7 +179,8 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
 
   if (config.metrics.enabled) {
     app.get('/metrics', async (req, res) => {
-      if (config.metrics.token && req.header('authorization') !== `Bearer ${config.metrics.token}`) {
+      const given = req.header('x-metrics-token') ?? (req.header('authorization') ?? '').replace(/^Bearer /i, '');
+      if (config.metrics.token && !safeEqual(given, config.metrics.token)) {
         res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Metrics token required' } });
         return;
       }
@@ -184,7 +195,17 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
   for (const m of MODULES) m.register(api);
   app.use('/v1', v1);
 
-  app.use((_req, _res, next) => next(new AppError('NOT_FOUND', 'Route not found')));
+  // wrong method on a known path => 405 + Allow (not a misleading 404)
+  const patterns = api.routes.map((r) => ({ re: new RegExp(`^/v1${r.path.replace(/:[^/]+/g, '[^/]+')}/?$`), method: r.method.toUpperCase() }));
+  app.use((req, res, next) => {
+    const allowed = [...new Set(patterns.filter((p) => p.re.test(req.path)).map((p) => p.method))];
+    if (allowed.length) {
+      if (allowed.includes('GET')) allowed.push('HEAD');
+      res.setHeader('Allow', allowed.join(', '));
+      return next(new AppError('METHOD_NOT_ALLOWED', `${req.method} is not allowed here; use ${allowed.join(', ')}`));
+    }
+    next(new AppError('NOT_FOUND', 'Route not found'));
+  });
   app.use(errorHandler(log, () => deps));
   const close = async () => {
     shed.stop();

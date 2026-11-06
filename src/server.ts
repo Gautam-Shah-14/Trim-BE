@@ -22,6 +22,9 @@ const pool = createPool({
   url: config.databaseUrl, ssl: config.databaseSsl, sslCaFile: config.databaseSslCaFile || undefined, pooler: config.dbPooler, max: config.databasePoolMax,
   statementTimeoutMs: config.statementTimeoutMs, lockTimeoutMs: config.lockTimeoutMs, idleTxTimeoutMs: config.idleTxTimeoutMs,
 });
+if (config.nodeEnv === 'production' && !config.bffSharedSecret) {
+  log.warn('BFF_SHARED_SECRET is not set: website visitors share the rate-limit bucket of the proxy IP. Set it on the API and on the website.');
+}
 pool.on('error', (err) => log.error({ err }, 'idle pg client error'));
 
 const { app, deps, close } = createApp({ config, pool, log });

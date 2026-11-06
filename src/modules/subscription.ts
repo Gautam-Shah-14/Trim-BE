@@ -80,7 +80,7 @@ export function register(api: Api) {
         });
       } catch (err) {
         deps.log.error({ err }, 'razorpay createSubscription failed');
-        throw new AppError('INTERNAL', 'The payment provider could not create the subscription, please try again');
+        throw new AppError('UPSTREAM_ERROR', 'The payment provider is unavailable, please try again shortly', undefined, 'PAYMENT_PROVIDER');
       }
       await deps.pool.query('UPDATE subscriptions SET razorpay_subscription_id = $2, plan_code = $3, interval = $4, payment_authorized_at = NULL, next_charge_at = NULL, updated_at = now() WHERE salon_id = $1', [ctx.salonId, sub.id, b.planCode, b.interval]);
       await auditReq(req, { action: 'subscription.checkout', entity: 'subscription', entityId: sub.id, meta: { planCode: b.planCode, interval: b.interval } });
@@ -100,7 +100,7 @@ export function register(api: Api) {
           await deps.gateway.cancelSubscription(cur.razorpay_subscription_id, true);
         } catch (err) {
           deps.log.error({ err }, 'razorpay cancel failed');
-          throw new AppError('INTERNAL', 'The payment provider could not cancel the subscription, please try again');
+          throw new AppError('UPSTREAM_ERROR', 'The payment provider is unavailable, please try again shortly', undefined, 'PAYMENT_PROVIDER');
         }
       }
       await c.query('UPDATE subscriptions SET cancel_at_period_end = true, updated_at = now() WHERE salon_id = $1', [ctx.salonId]);
