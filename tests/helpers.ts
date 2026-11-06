@@ -2,7 +2,8 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import pg from 'pg';
 import { inject } from 'vitest';
-import { createApp } from '../src/app.js';
+import { createApp, type CreateAppOptions } from '../src/app.js';
+import type { Deps } from '../src/http/types.js';
 import { loadConfig, type Config } from '../src/config.js';
 import { createPool } from '../src/db.js';
 import type { CreateSubscriptionInput, PaymentGateway } from '../src/lib/gateway.js';
@@ -35,12 +36,13 @@ export interface Ctx {
   pool: pg.Pool;
   config: Config;
   gateway: FakeGateway;
+  deps: Deps;
   webhookSecret: string;
   close: () => Promise<void>;
 }
 
 /** Clone the migrated template DB into a fresh database and boot the real app on an ephemeral port. */
-export async function startCtx(overrides: Record<string, string> = {}): Promise<Ctx> {
+export async function startCtx(overrides: Record<string, string> = {}, extra: Partial<CreateAppOptions> = {}): Promise<Ctx> {
   const p = inject('pg');
   const name = `t_${randomBytes(6).toString('hex')}`;
   const admin = new pg.Client({ host: p.host, port: p.port, user: p.user, password: p.password, database: 'postgres' });
@@ -62,22 +64,39 @@ export async function startCtx(overrides: Record<string, string> = {}): Promise<
     RATE_LIMIT_LOGIN_PER_15MIN: '100000',
     RATE_LIMIT_CONTACT_PER_HOUR: '100000',
     DATABASE_POOL_MAX: '20',
-    HOLD_SWEEPER_ENABLED: 'false',
+    QUEUE_DRIVER: 'memory',
+    RATE_LIMIT_REGISTER_PER_HOUR: '100000',
+    RATE_LIMIT_AVAILABILITY_PER_MIN: '100000',
+    RATE_LIMIT_HOLD_PER_MIN: '100000',
+    RATE_LIMIT_CHECKIN_PER_MIN: '100000',
+    // caches off by default so tests that edit rows with SQL see them immediately; cache.test.ts turns them on
+    CACHE_TTL_PLANS_S: '0',
+    CACHE_TTL_CATALOG_S: '0',
+    CACHE_TTL_SALON_PUBLIC_S: '0',
+    CACHE_TTL_DISCOVER_S: '0',
+    CACHE_TTL_AVAILABILITY_S: '0',
+    CACHE_TTL_ENTITLEMENTS_S: '0',
+    CACHE_TTL_SESSION_S: '0',
     ...overrides,
   });
-  const pool = createPool({ url: config.databaseUrl, ssl: false, max: config.databasePoolMax });
+  const pool = createPool({ url: config.databaseUrl, ssl: false, max: config.databasePoolMax, statementTimeoutMs: config.statementTimeoutMs, lockTimeoutMs: config.lockTimeoutMs, idleTxTimeoutMs: config.idleTxTimeoutMs });
   const gateway = fakeGateway();
-  const { app } = createApp({ config, pool, log: createLogger('silent', 'test'), gateway });
+  const { app, deps, close: closeApp } = createApp({ config, pool, log: createLogger(process.env['TEST_LOG'] ?? 'silent', 'test'), gateway, ...extra });
   const server = await new Promise<import('node:http').Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
-    base, pool, config, gateway, webhookSecret,
+    base, pool, config, gateway, deps, webhookSecret,
     close: async () => {
       server.closeAllConnections();
       await new Promise((r) => server.close(r));
+      await closeApp();
       await pool.end();
+      await new Promise<void>((resolve) => {
+        const dropper = new pg.Client({ host: p.host, port: p.port, user: p.user, password: p.password, database: 'postgres' });
+        dropper.connect().then(() => dropper.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)).catch(() => {}).finally(() => dropper.end().catch(() => {}).finally(resolve));
+      });
     },
   };
 }
@@ -147,6 +166,31 @@ export async function makeOwner(ctx: Ctx, opts: { approve?: boolean; lat?: numbe
   };
 }
 
+const minutesOfDay = (ms: number, tz: string) => {
+  const [h, m] = new Date(ms).toLocaleTimeString('en-GB', { timeZone: tz, hour12: false }).split(':').map(Number) as [number, number];
+  return h * 60 + m;
+};
+
+/**
+ * Open the salon 00:00-23:59 on every day in a timezone where "now .. now+100min" does not cross local midnight, so tests that
+ * book "20 minutes from now" are stable at any time of day.
+ */
+export async function openAllDay(ctx: Ctx, o: Owner): Promise<string> {
+  const tz =
+    ['Asia/Kolkata', 'UTC', 'America/New_York', 'Asia/Tokyo', 'Europe/London'].find((z) => {
+      const a = minutesOfDay(Date.now(), z);
+      const b = minutesOfDay(Date.now() + 100 * 60_000, z);
+      return a >= 30 && b > a && b <= 23 * 60;
+    }) ?? 'UTC';
+  await ctx.pool.query('UPDATE salons SET timezone = $1 WHERE id = $2', [tz, o.salonId]);
+  const r = await call(ctx, 'PUT', `/v1/salons/${o.salonId}/hours`, {
+    token: o.token,
+    body: { hours: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, opens: '00:00', closes: '23:59', isClosed: false })) },
+  });
+  if (r.status !== 200) throw new Error(JSON.stringify(r.body));
+  return tz;
+}
+
 export async function makeCustomer(ctx: Ctx): Promise<{ token: string; userId: string; email: string }> {
   const email = `cust-${uniq()}@example.test`;
   const r = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'Chandni Customer', email, phone: phone(), password: PASSWORD } });
@@ -166,8 +210,50 @@ export function sign(ctx: Ctx, raw: string): string {
 
 export async function webhook(ctx: Ctx, event: Record<string, unknown>, eventId: string = randomUUID(), signature?: string): Promise<Res> {
   const raw = JSON.stringify(event);
-  return call(ctx, 'POST', '/v1/webhooks/razorpay', {
+  const r = await call(ctx, 'POST', '/v1/webhooks/razorpay', {
     raw,
     headers: { 'Content-Type': 'application/json', 'X-Razorpay-Signature': signature ?? sign(ctx, raw), 'X-Razorpay-Event-Id': eventId },
   });
+  await ctx.deps.queue.drain(); // the worker applies the event after the 200
+  return r;
+}
+
+export async function eventResult(ctx: Ctx, eventId: string): Promise<string | null> {
+  return (await ctx.pool.query('SELECT result FROM subscription_events WHERE razorpay_event_id = $1', [eventId])).rows[0]?.result ?? null;
+}
+
+/** minimal in-memory stand-in for ioredis: lets us exercise RedisCache/RedisLimiter without a Redis server */
+export class FakeRedis {
+  data = new Map<string, { v: string; exp: number | null }>();
+  calls: string[] = [];
+  down = false;
+  private live(k: string) {
+    const e = this.data.get(k);
+    if (e && e.exp !== null && e.exp <= Date.now()) this.data.delete(k);
+    return this.data.get(k);
+  }
+  private chk(name: string) {
+    this.calls.push(name);
+    if (this.down) throw new Error('redis down');
+  }
+  async get(k: string) { this.chk('get'); return this.live(k)?.v ?? null; }
+  async set(k: string, v: string, ...args: (string | number)[]) {
+    this.chk('set');
+    let exp: number | null = null;
+    let nx = false;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === 'EX') exp = Date.now() + Number(args[++i]) * 1000;
+      else if (args[i] === 'PX') exp = Date.now() + Number(args[++i]);
+      else if (args[i] === 'NX') nx = true;
+    }
+    if (nx && this.live(k)) return null;
+    this.data.set(k, { v, exp });
+    return 'OK';
+  }
+  async del(...ks: string[]) { this.chk('del'); let n = 0; for (const k of ks) if (this.data.delete(k)) n++; return n; }
+  async incr(k: string) { this.chk('incr'); const n = Number(this.live(k)?.v ?? 0) + 1; this.data.set(k, { v: String(n), exp: this.live(k)?.exp ?? null }); return n; }
+  async pexpire(k: string, ms: number) { this.chk('pexpire'); const e = this.live(k); if (!e) return 0; e.exp = Date.now() + ms; return 1; }
+  async pttl(k: string) { this.chk('pttl'); const e = this.live(k); return e ? (e.exp === null ? -1 : e.exp - Date.now()) : -2; }
+  async ping() { this.chk('ping'); return 'PONG'; }
+  async quit() { return 'OK'; }
 }

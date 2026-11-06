@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
+import type { ChildProcess } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,12 +46,22 @@ export default async function setup(project: TestProject) {
   await seedReference(pool);
   await pool.end();
   project.provide('pg', { host: '127.0.0.1', port, user: 'postgres', password, template: 'trim_template' });
+  return teardown;
 }
 
-export async function teardown() {
+async function teardown() {
+  // embedded-postgres' own stop() can leave the child + its pipes referenced on Windows, which is what made vitest print
+  // "close timed out ... 2 Vite servers". Stop gracefully with a deadline, then make sure the child and its pipes are gone.
+  const child = (pgServer as unknown as { process?: ChildProcess } | undefined)?.process;
   try {
-    await pgServer?.stop();
+    await Promise.race([pgServer?.stop(), new Promise((r) => setTimeout(r, 8000))]);
   } catch {
-    /* Windows sometimes reports a non-zero checkpointer exit on shutdown; harmless */
+    /* a non-zero checkpointer exit on shutdown is harmless */
   }
+  if (child && child.exitCode === null && !child.killed) child.kill();
+  child?.stdin?.destroy();
+  child?.stdout?.destroy();
+  child?.stderr?.destroy();
+  child?.unref();
+  pgServer = undefined;
 }

@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createLogger } from '../src/logger.js';
-import { call, makeCustomer, makeOwner, PASSWORD, phone, slotAt, startCtx, type Ctx, type Owner } from './helpers.js';
+import { call, makeCustomer, makeOwner, openAllDay, PASSWORD, phone, slotAt, startCtx, type Ctx, type Owner } from './helpers.js';
 
 let ctx: Ctx;
 let owner: Owner;
@@ -249,6 +249,7 @@ describe('public endpoints', () => {
     const mumbai = await makeOwner(ctx, { lat: 19.076, lng: 72.8777, name: 'Mumbai Salon' });
     const hidden = await makeOwner(ctx, { lat: 18.52, lng: 73.85, approve: false, name: 'Hidden Pending' });
     const r = await call(ctx, 'GET', '/v1/discover/salons?lat=18.5204&lng=73.8567&radiusKm=200&limit=100');
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
     const ids = r.body.data.map((s: any) => s.id);
     expect(ids).not.toContain(hidden.salonId);
     expect(ids.indexOf(pune.salonId)).toBeLessThan(ids.indexOf(mumbai.salonId));
@@ -337,7 +338,7 @@ describe('closures, time off and availability', () => {
 
   it('customer cancel respects the cutoff (default 120 min)', async () => {
     const o = await makeOwner(ctx);
-    await call(ctx, 'PUT', `/v1/salons/${o.salonId}/hours`, { token: o.token, body: { hours: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, opens: '00:00', closes: '23:59' })) } });
+    await openAllDay(ctx, o);
     const c = await makeCustomer(ctx);
     const soon = new Date(Math.ceil((Date.now() + 40 * 60_000) / 300_000) * 300_000).toISOString();
     const h = await call(ctx, 'POST', '/v1/bookings/hold', { token: c.token, body: { salonId: o.salonId, staffId: o.staffId, serviceIds: [o.serviceId], startsAt: soon } });

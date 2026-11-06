@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { findOverlaps } from '../src/lib/invariants.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { call, makeCustomer, makeOwner, phone, PASSWORD, slotAt, startCtx, webhook, type Ctx, type Owner } from './helpers.js';
+import { call, eventResult, makeCustomer, makeOwner, openAllDay, phone, PASSWORD, slotAt, startCtx, webhook, type Ctx, type Owner } from './helpers.js';
 
 let ctx: Ctx;
 let owner: Owner;
@@ -24,6 +25,7 @@ describe('double booking (spec 7.1, 7.2)', () => {
     expect(results.filter((r) => r.status !== 201).map((r) => r.status + ':' + r.body?.error?.code)).toEqual(Array(49).fill('409:SLOT_TAKEN'));
     const rows = await ctx.pool.query("SELECT count(*)::int AS n FROM bookings WHERE staff_id = $1 AND starts_at = $2 AND status = 'held'", [owner.staffId, startsAt]);
     expect(rows.rows[0].n).toBe(1);
+    expect(await findOverlaps(ctx.pool)).toEqual([]); // post-run invariant used after load tests
   }, 120_000);
 
   it('partially overlapping ranges are refused, adjacent ones are fine', async () => {
@@ -107,11 +109,7 @@ describe('check-in and versioning (spec 7.4, 7.6)', () => {
   let o2: Owner;
   beforeEach(async () => {
     o2 = await makeOwner(ctx);
-    // open 24h so "starting in 20 minutes" is always inside working hours
-    await call(ctx, 'PUT', `/v1/salons/${o2.salonId}/hours`, {
-      token: o2.token,
-      body: { hours: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, opens: '00:00', closes: '23:59', isClosed: false })) },
-    });
+    await openAllDay(ctx, o2);
   });
   const soon = () => {
     const t = Math.ceil((Date.now() + 20 * 60_000) / 300_000) * 300_000;
@@ -294,7 +292,8 @@ describe('Razorpay webhook (spec 7.7)', () => {
     const e = ev('subscription.charged', T + 10);
     const rs = await Promise.all(Array.from({ length: 6 }, () => webhook(ctx, e, id)));
     expect(rs.every((r) => r.status === 200)).toBe(true);
-    expect(rs.filter((r) => r.body.data.result === 'applied')).toHaveLength(1);
+    expect(rs.filter((r) => r.body.data.result === 'queued')).toHaveLength(1);
+    expect(await eventResult(ctx, id)).toBe('applied');
     expect(rs.filter((r) => r.body.data.result === 'duplicate')).toHaveLength(5);
     const s = await sub();
     expect(s.status).toBe('active');
@@ -312,11 +311,13 @@ describe('Razorpay webhook (spec 7.7)', () => {
   });
 
   it('out-of-order events: an older "pending" after a newer "charged" is ignored', async () => {
-    const r = await webhook(ctx, ev('subscription.pending', T + 5), randomUUID());
-    expect(r.body.data.result).toBe('stale');
+    const staleId = randomUUID();
+    await webhook(ctx, ev('subscription.pending', T + 5), staleId);
+    expect(await eventResult(ctx, staleId)).toBe('stale');
     expect((await sub()).status).toBe('active');
-    const newer = await webhook(ctx, ev('subscription.pending', T + 100), randomUUID());
-    expect(newer.body.data.result).toBe('applied');
+    const newerId = randomUUID();
+    await webhook(ctx, ev('subscription.pending', T + 100), newerId);
+    expect(await eventResult(ctx, newerId)).toBe('applied');
     const s = await sub();
     expect(s.status).toBe('past_due');
     expect(s.past_due_since).toBeTruthy();
@@ -343,8 +344,9 @@ describe('Razorpay webhook (spec 7.7)', () => {
   it('events for another product on the shared Razorpay account are ignored', async () => {
     const e = ev('subscription.cancelled', T + 300);
     (e.payload.subscription.entity as any).notes = { app: 'other-product' };
-    const r = await webhook(ctx, e, randomUUID());
-    expect(r.body.data.result).toBe('ignored');
+    const otherId = randomUUID();
+    await webhook(ctx, e, otherId);
+    expect(await eventResult(ctx, otherId)).toBe('ignored');
     expect((await sub()).status).toBe('halted');
   });
 
