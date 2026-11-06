@@ -2,7 +2,37 @@ openapi: 3.1.0
 info:
   title: Trim API
   version: 0.1.0
-  description: "REST API of the Trim salon platform. Success: `{data, meta?}`. Error: `{error:{code,message,details?}}`. Money = integer paise; times = ISO-8601 UTC; phones = E.164. GENERATED from the route registry by `npm run openapi` - do not edit by hand."
+  description: "REST API of the Trim salon platform. Success: `{data, meta?}`. Error: `{error:{code,message,details?}}`. Money = integer paise; times = ISO-8601 UTC; phones = E.164. GENERATED from the route registry and src/schemas.ts by `npm run openapi` - do not edit by hand."
+  x-error-reasons:
+    WRONG_SALON: 403 FORBIDDEN - the QR code belongs to another salon
+    QR_OUTDATED: 409 CONFLICT - the booking was rescheduled, this QR is no longer valid
+    CANCEL_CUTOFF: 409 CONFLICT - customer cancel is only allowed >= salon.cancelCutoffMin before the start (details.cutoffMin)
+    HOLD_LIMIT: 409 CONFLICT - customer already has the maximum number of active holds (default 3; details.limit/current)
+    UPCOMING_LIMIT: 409 CONFLICT - customer already has the maximum number of upcoming confirmed bookings (default 10)
+    DAILY_LIMIT: 409 CONFLICT - customer created the maximum number of bookings in the last 24 h (default 5)
+    INVALID_STATE: 409 CONFLICT - the booking/subscription is in a state that does not allow this action
+    TOO_EARLY: 409 CONFLICT - no-show can only be set after the start time
+    LAST_OWNER: 409 CONFLICT - a salon must keep one active owner
+    REVIEW_EXISTS: 409 CONFLICT - the booking already has a review
+    NOT_COMPLETED: 409 CONFLICT - only completed bookings can be reviewed
+    ALREADY_REPORTED: 409 CONFLICT - you already reported this review
+    ALREADY_SUBSCRIBED: 409 CONFLICT - an active subscription exists; cancel it first
+    PLAN_NOT_CONFIGURED: 409 CONFLICT - the Razorpay plan id for this plan/interval is not set yet
+    PHONE_TAKEN: 409 CONFLICT - phone already registered
+    EMAIL_TAKEN: 409 CONFLICT - email already registered
+    ACCOUNT_EXISTS: 409 CONFLICT - email or phone already registered (admin create)
+    INVOICE_EXISTS: 409 CONFLICT - the booking already has a non-void invoice
+    ALREADY_VOID: 409 CONFLICT - invoice already void
+    IDEMPOTENCY_IN_PROGRESS: 409 CONFLICT - a request with this Idempotency-Key is still running
+    DUPLICATE_CLOSURE: 409 CONFLICT - date already marked closed
+    ROLE_NAME_TAKEN: 409 CONFLICT - role name already used in this salon
+    ROLE_IN_USE: 409 CONFLICT - role still has staff
+    SYSTEM_ROLE: 403 FORBIDDEN - system roles cannot be deleted/renamed
+    OWNER_ROLE_LOCKED: 403 FORBIDDEN - the owner role cannot be edited
+    PHOTO_LIMIT: 409 CONFLICT - salon photo limit reached
+    NAME_TAKEN: 409 CONFLICT - hairstyle name exists
+    SELF_CHANGE: 409 CONFLICT - admins cannot change their own active state
+    NOT_READY: 409 CONFLICT - export job not finished
 servers:
   - url: /v1
 security:
@@ -36,6 +66,8 @@ components:
                 - PLAN_LIMIT
                 - SUBSCRIPTION_INACTIVE
                 - RATE_LIMITED
+                - OVERLOADED
+                - TIMEOUT
                 - INTERNAL
             message:
               type: string
@@ -53,7 +85,55 @@ components:
                 - type: object
             reason:
               type: string
-              description: Machine-readable sub-reason for generic CONFLICT/FORBIDDEN, e.g. CANCEL_CUTOFF, QR_OUTDATED, WRONG_SALON
+              description: Stable machine-readable sub-reason for CONFLICT/FORBIDDEN (see x-error-reasons). For a missing salon permission it is the permission key, e.g. billing.void.
+              enum:
+                - WRONG_SALON
+                - QR_OUTDATED
+                - CANCEL_CUTOFF
+                - HOLD_LIMIT
+                - UPCOMING_LIMIT
+                - DAILY_LIMIT
+                - INVALID_STATE
+                - TOO_EARLY
+                - LAST_OWNER
+                - REVIEW_EXISTS
+                - NOT_COMPLETED
+                - ALREADY_REPORTED
+                - ALREADY_SUBSCRIBED
+                - PLAN_NOT_CONFIGURED
+                - PHONE_TAKEN
+                - EMAIL_TAKEN
+                - ACCOUNT_EXISTS
+                - INVOICE_EXISTS
+                - ALREADY_VOID
+                - IDEMPOTENCY_IN_PROGRESS
+                - DUPLICATE_CLOSURE
+                - ROLE_NAME_TAKEN
+                - ROLE_IN_USE
+                - SYSTEM_ROLE
+                - OWNER_ROLE_LOCKED
+                - PHOTO_LIMIT
+                - NAME_TAKEN
+                - SELF_CHANGE
+                - NOT_READY
+                - booking.view
+                - booking.create
+                - booking.update
+                - booking.cancel
+                - checkin.scan
+                - billing.view
+                - billing.create
+                - billing.void
+                - services.view
+                - services.edit
+                - staff.view
+                - staff.manage
+                - roles.manage
+                - analytics.view
+                - settings.edit
+                - payments.configure
+                - reviews.reply
+                - customers.view
           required:
             - code
             - message
@@ -64,7 +144,6 @@ components:
       properties:
         id:
           type: string
-          format: uuid
         fullName:
           type: string
         phone:
@@ -88,22 +167,32 @@ components:
             - "null"
         mustChangePassword:
           type: boolean
+      required:
+        - id
+        - fullName
+        - phone
+        - email
+        - role
+        - avatarMediaId
+        - mustChangePassword
+      additionalProperties: false
     Membership:
       type: object
       properties:
         salonId:
           type: string
-          format: uuid
         salonName:
           type: string
         salonStatus:
           type: string
+          enum:
+            - pending
+            - approved
+            - suspended
         staffId:
           type: string
-          format: uuid
         roleId:
           type: string
-          format: uuid
         roleName:
           type: string
         permissions:
@@ -118,6 +207,19 @@ components:
           type: boolean
         desktopAccess:
           type: boolean
+      required:
+        - salonId
+        - salonName
+        - salonStatus
+        - staffId
+        - roleId
+        - roleName
+        - permissions
+        - planCode
+        - subscriptionStatus
+        - readOnly
+        - desktopAccess
+      additionalProperties: false
     AuthTokens:
       type: object
       properties:
@@ -127,6 +229,13 @@ components:
           type: string
         expiresIn:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - accessToken
+        - refreshToken
+        - expiresIn
+      additionalProperties: false
     AuthResult:
       type: object
       properties:
@@ -136,31 +245,861 @@ components:
           type: string
         expiresIn:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         user:
-          $ref: "#/components/schemas/User"
+          type: object
+          properties:
+            id:
+              type: string
+            fullName:
+              type: string
+            phone:
+              type:
+                - string
+                - "null"
+            email:
+              type:
+                - string
+                - "null"
+            role:
+              type: string
+              enum:
+                - customer
+                - salon_user
+                - admin
+                - sales_agent
+            avatarMediaId:
+              type:
+                - string
+                - "null"
+            mustChangePassword:
+              type: boolean
+          required:
+            - id
+            - fullName
+            - phone
+            - email
+            - role
+            - avatarMediaId
+            - mustChangePassword
+          additionalProperties: false
         memberships:
           type: array
           items:
-            $ref: "#/components/schemas/Membership"
+            type: object
+            properties:
+              salonId:
+                type: string
+              salonName:
+                type: string
+              salonStatus:
+                type: string
+                enum:
+                  - pending
+                  - approved
+                  - suspended
+              staffId:
+                type: string
+              roleId:
+                type: string
+              roleName:
+                type: string
+              permissions:
+                type: array
+                items:
+                  type: string
+              planCode:
+                type: string
+              subscriptionStatus:
+                type: string
+              readOnly:
+                type: boolean
+              desktopAccess:
+                type: boolean
+            required:
+              - salonId
+              - salonName
+              - salonStatus
+              - staffId
+              - roleId
+              - roleName
+              - permissions
+              - planCode
+              - subscriptionStatus
+              - readOnly
+              - desktopAccess
+            additionalProperties: false
         salon:
           type: object
           properties:
             id:
               type: string
-              format: uuid
             name:
               type: string
             status:
               type: string
+          required:
+            - id
+            - name
+            - status
+          additionalProperties: false
+      required:
+        - accessToken
+        - refreshToken
+        - expiresIn
+        - user
+        - memberships
+      additionalProperties: false
+    MeResult:
+      type: object
+      properties:
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            fullName:
+              type: string
+            phone:
+              type:
+                - string
+                - "null"
+            email:
+              type:
+                - string
+                - "null"
+            role:
+              type: string
+              enum:
+                - customer
+                - salon_user
+                - admin
+                - sales_agent
+            avatarMediaId:
+              type:
+                - string
+                - "null"
+            mustChangePassword:
+              type: boolean
+          required:
+            - id
+            - fullName
+            - phone
+            - email
+            - role
+            - avatarMediaId
+            - mustChangePassword
+          additionalProperties: false
+        memberships:
+          type: array
+          items:
+            type: object
+            properties:
+              salonId:
+                type: string
+              salonName:
+                type: string
+              salonStatus:
+                type: string
+                enum:
+                  - pending
+                  - approved
+                  - suspended
+              staffId:
+                type: string
+              roleId:
+                type: string
+              roleName:
+                type: string
+              permissions:
+                type: array
+                items:
+                  type: string
+              planCode:
+                type: string
+              subscriptionStatus:
+                type: string
+              readOnly:
+                type: boolean
+              desktopAccess:
+                type: boolean
+            required:
+              - salonId
+              - salonName
+              - salonStatus
+              - staffId
+              - roleId
+              - roleName
+              - permissions
+              - planCode
+              - subscriptionStatus
+              - readOnly
+              - desktopAccess
+            additionalProperties: false
+      required:
+        - user
+        - memberships
+      additionalProperties: false
+    Limits:
+      type: object
+      properties:
+        maxBranches:
+          anyOf:
+            - type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            - type: "null"
+        maxStaff:
+          anyOf:
+            - type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            - type: "null"
+        customRoles:
+          type: boolean
+        desktopAccess:
+          type: boolean
+        analyticsLevel:
+          type: string
+          enum:
+            - basic
+            - full
+        csvExport:
+          type: boolean
+        billTemplates:
+          type: boolean
+      required:
+        - maxBranches
+        - maxStaff
+        - customRoles
+        - desktopAccess
+        - analyticsLevel
+        - csvExport
+        - billTemplates
+      additionalProperties: false
+    Entitlements:
+      type: object
+      properties:
+        planCode:
+          type: string
+        status:
+          type: string
+        readOnly:
+          type: boolean
+        graceEndsAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        limits:
+          type: object
+          properties:
+            maxBranches:
+              anyOf:
+                - type: integer
+                  minimum: -9007199254740991
+                  maximum: 9007199254740991
+                - type: "null"
+            maxStaff:
+              anyOf:
+                - type: integer
+                  minimum: -9007199254740991
+                  maximum: 9007199254740991
+                - type: "null"
+            customRoles:
+              type: boolean
+            desktopAccess:
+              type: boolean
+            analyticsLevel:
+              type: string
+              enum:
+                - basic
+                - full
+            csvExport:
+              type: boolean
+            billTemplates:
+              type: boolean
+          required:
+            - maxBranches
+            - maxStaff
+            - customRoles
+            - desktopAccess
+            - analyticsLevel
+            - csvExport
+            - billTemplates
+          additionalProperties: false
+      required:
+        - planCode
+        - status
+        - readOnly
+        - graceEndsAt
+        - limits
+      additionalProperties: false
+    Salon:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        addressLine:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+        state:
+          type:
+            - string
+            - "null"
+        pincode:
+          type:
+            - string
+            - "null"
+        lat:
+          type:
+            - number
+            - "null"
+        lng:
+          type:
+            - number
+            - "null"
+        timezone:
+          type: string
+        logoMediaId:
+          type:
+            - string
+            - "null"
+        brandColor:
+          type:
+            - string
+            - "null"
+        billFooter:
+          type:
+            - string
+            - "null"
+        gstin:
+          type:
+            - string
+            - "null"
+        gstEnabled:
+          type: boolean
+        invoicePrefix:
+          type: string
+        cancelCutoffMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        ratingAvg:
+          type: number
+        ratingCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        status:
+          type: string
+          enum:
+            - pending
+            - approved
+            - suspended
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - name
+        - slug
+        - description
+        - phone
+        - addressLine
+        - city
+        - state
+        - pincode
+        - lat
+        - lng
+        - timezone
+        - logoMediaId
+        - brandColor
+        - billFooter
+        - gstin
+        - gstEnabled
+        - invoicePrefix
+        - cancelCutoffMin
+        - ratingAvg
+        - ratingCount
+        - status
+        - createdAt
+      additionalProperties: false
+    SalonFull:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        addressLine:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+        state:
+          type:
+            - string
+            - "null"
+        pincode:
+          type:
+            - string
+            - "null"
+        lat:
+          type:
+            - number
+            - "null"
+        lng:
+          type:
+            - number
+            - "null"
+        timezone:
+          type: string
+        logoMediaId:
+          type:
+            - string
+            - "null"
+        brandColor:
+          type:
+            - string
+            - "null"
+        billFooter:
+          type:
+            - string
+            - "null"
+        gstin:
+          type:
+            - string
+            - "null"
+        gstEnabled:
+          type: boolean
+        invoicePrefix:
+          type: string
+        cancelCutoffMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        ratingAvg:
+          type: number
+        ratingCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        status:
+          type: string
+          enum:
+            - pending
+            - approved
+            - suspended
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        photoMediaIds:
+          type: array
+          items:
+            type: string
+        entitlements:
+          type: object
+          properties:
+            planCode:
+              type: string
+            status:
+              type: string
+            readOnly:
+              type: boolean
+            graceEndsAt:
+              anyOf:
+                - type: string
+                  description: ISO-8601 UTC timestamp
+                - type: "null"
+            limits:
+              type: object
+              properties:
+                maxBranches:
+                  anyOf:
+                    - type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    - type: "null"
+                maxStaff:
+                  anyOf:
+                    - type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    - type: "null"
+                customRoles:
+                  type: boolean
+                desktopAccess:
+                  type: boolean
+                analyticsLevel:
+                  type: string
+                  enum:
+                    - basic
+                    - full
+                csvExport:
+                  type: boolean
+                billTemplates:
+                  type: boolean
+              required:
+                - maxBranches
+                - maxStaff
+                - customRoles
+                - desktopAccess
+                - analyticsLevel
+                - csvExport
+                - billTemplates
+              additionalProperties: false
+          required:
+            - planCode
+            - status
+            - readOnly
+            - graceEndsAt
+            - limits
+          additionalProperties: false
+        myRole:
+          type: object
+          properties:
+            roleName:
+              type:
+                - string
+                - "null"
+            permissions:
+              type: array
+              items:
+                type: string
+          required:
+            - roleName
+            - permissions
+          additionalProperties: false
+      required:
+        - id
+        - name
+        - slug
+        - description
+        - phone
+        - addressLine
+        - city
+        - state
+        - pincode
+        - lat
+        - lng
+        - timezone
+        - logoMediaId
+        - brandColor
+        - billFooter
+        - gstin
+        - gstEnabled
+        - invoicePrefix
+        - cancelCutoffMin
+        - ratingAvg
+        - ratingCount
+        - status
+        - createdAt
+        - photoMediaIds
+        - entitlements
+        - myRole
+      additionalProperties: false
+    Hours:
+      type: object
+      properties:
+        weekday:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        opens:
+          type: string
+        closes:
+          type: string
+        isClosed:
+          type: boolean
+      required:
+        - weekday
+        - opens
+        - closes
+        - isClosed
+      additionalProperties: false
+    Closure:
+      type: object
+      properties:
+        id:
+          type: string
+        date:
+          type: string
+        reason:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - date
+        - reason
+      additionalProperties: false
+    Service:
+      type: object
+      properties:
+        id:
+          type: string
+        templateId:
+          type:
+            - string
+            - "null"
+        category:
+          type: string
+        name:
+          type: string
+        description:
+          type:
+            - string
+            - "null"
+        audience:
+          type: string
+          enum:
+            - all
+            - men
+            - women
+            - kids
+        durationMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        bufferMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        pricePaise:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        isActive:
+          type: boolean
+        sort:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - id
+        - templateId
+        - category
+        - name
+        - description
+        - audience
+        - durationMin
+        - bufferMin
+        - pricePaise
+        - isActive
+        - sort
+      additionalProperties: false
+    ServiceTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+        category:
+          type: string
+        name:
+          type: string
+        audience:
+          type: string
+          enum:
+            - all
+            - men
+            - women
+            - kids
+        defaultDurationMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        suggestedPricePaise:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        sort:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - id
+        - category
+        - name
+        - audience
+        - defaultDurationMin
+        - suggestedPricePaise
+        - sort
+      additionalProperties: false
+    Staff:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        displayName:
+          type: string
+        fullName:
+          type: string
+        roleId:
+          type: string
+        roleName:
+          type: string
+        photoMediaId:
+          type:
+            - string
+            - "null"
+        speedMultiplier:
+          type: number
+        isBookable:
+          type: boolean
+        isActive:
+          type: boolean
+        serviceIds:
+          type: array
+          items:
+            type: string
+        phone:
+          type:
+            - string
+            - "null"
+        email:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - userId
+        - displayName
+        - fullName
+        - roleId
+        - roleName
+        - photoMediaId
+        - speedMultiplier
+        - isBookable
+        - isActive
+        - serviceIds
+        - createdAt
+      additionalProperties: false
+    StaffHours:
+      type: object
+      properties:
+        weekday:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        start:
+          type: string
+        end:
+          type: string
+      required:
+        - weekday
+        - start
+        - end
+      additionalProperties: false
+    TimeOff:
+      type: object
+      properties:
+        id:
+          type: string
+        from:
+          type: string
+          description: ISO-8601 UTC timestamp
+        to:
+          type: string
+          description: ISO-8601 UTC timestamp
+        reason:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - from
+        - to
+        - reason
+      additionalProperties: false
+    Role:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        isSystem:
+          type: boolean
+        permissions:
+          type: array
+          items:
+            type: string
+        memberCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - id
+        - name
+        - isSystem
+        - permissions
+        - memberCount
+      additionalProperties: false
+    Permission:
+      type: object
+      properties:
+        key:
+          type: string
+        description:
+          type: string
+      required:
+        - key
+        - description
+      additionalProperties: false
+    ServiceIds:
+      type: object
+      properties:
+        serviceIds:
+          type: array
+          items:
+            type: string
+      required:
+        - serviceIds
+      additionalProperties: false
     Booking:
       type: object
       properties:
         id:
           type: string
-          format: uuid
         salonId:
           type: string
-          format: uuid
         salonName:
           type: string
         customerId:
@@ -175,14 +1114,15 @@ components:
             - "null"
         staffId:
           type: string
-          format: uuid
         staffName:
           type: string
         source:
+          type: string
           enum:
             - app
             - walk_in
         status:
+          type: string
           enum:
             - held
             - confirmed
@@ -193,21 +1133,27 @@ components:
             - expired
         startsAt:
           type: string
-          format: date-time
+          description: ISO-8601 UTC timestamp
         endsAt:
           type: string
-          format: date-time
+          description: ISO-8601 UTC timestamp
         totalDurationMin:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         totalPricePaise:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         holdExpiresAt:
-          type:
-            - string
-            - "null"
-          format: date-time
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
         version:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         cancelledReason:
           type:
             - string
@@ -218,31 +1164,62 @@ components:
             type: object
             properties:
               serviceId:
-                type: string
-                format: uuid
+                type:
+                  - string
+                  - "null"
               name:
                 type: string
               durationMin:
                 type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
               pricePaise:
                 type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - serviceId
+              - name
+              - durationMin
+              - pricePaise
+            additionalProperties: false
         hasReview:
           type: boolean
-        qrToken:
-          type: string
-          description: Only on customer GET/confirm while status=confirmed
         createdAt:
           type: string
-          format: date-time
+          description: ISO-8601 UTC timestamp
+        qrToken:
+          description: Only on customer GET /bookings and confirm while status=confirmed
+          type: string
+      required:
+        - id
+        - salonId
+        - salonName
+        - customerId
+        - customerName
+        - customerPhone
+        - staffId
+        - staffName
+        - source
+        - status
+        - startsAt
+        - endsAt
+        - totalDurationMin
+        - totalPricePaise
+        - holdExpiresAt
+        - version
+        - cancelledReason
+        - items
+        - hasReview
+        - createdAt
+      additionalProperties: false
     Invoice:
       type: object
       properties:
         id:
           type: string
-          format: uuid
         salonId:
           type: string
-          format: uuid
         bookingId:
           type:
             - string
@@ -257,21 +1234,42 @@ components:
             - "null"
         subtotalPaise:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         discountPaise:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         taxPaise:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         taxLabel:
+          type:
+            - string
+            - "null"
+        taxRatePct:
+          type:
+            - number
+            - "null"
+        gstinSnapshot:
           type:
             - string
             - "null"
         totalPaise:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         status:
+          type: string
           enum:
             - draft
             - paid
             - void
+        voidedReason:
+          type:
+            - string
+            - "null"
         items:
           type: array
           items:
@@ -285,10 +1283,23 @@ components:
                 type: string
               qty:
                 type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
               unitPricePaise:
                 type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
               lineTotalPaise:
                 type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - serviceId
+              - name
+              - qty
+              - unitPricePaise
+              - lineTotalPaise
+            additionalProperties: false
         payments:
           type: array
           items:
@@ -298,16 +1309,185 @@ components:
                 type: string
               amountPaise:
                 type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
               reference:
                 type:
                   - string
                   - "null"
               paidAt:
                 type: string
-                format: date-time
+                description: ISO-8601 UTC timestamp
+            required:
+              - methodCode
+              - amountPaise
+              - reference
+              - paidAt
+            additionalProperties: false
         createdAt:
           type: string
-          format: date-time
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - salonId
+        - bookingId
+        - invoiceNo
+        - customerName
+        - customerPhone
+        - subtotalPaise
+        - discountPaise
+        - taxPaise
+        - taxLabel
+        - taxRatePct
+        - gstinSnapshot
+        - totalPaise
+        - status
+        - voidedReason
+        - items
+        - payments
+        - createdAt
+      additionalProperties: false
+    PaymentMethod:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - cash
+            - card
+            - upi
+            - wallet
+            - bank_transfer
+            - other
+        label:
+          type: string
+        isEnabled:
+          type: boolean
+        upiId:
+          type:
+            - string
+            - "null"
+        sort:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - code
+        - label
+        - isEnabled
+        - upiId
+        - sort
+      additionalProperties: false
+    SalonReview:
+      type: object
+      properties:
+        id:
+          type: string
+        bookingId:
+          type: string
+        rating:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        comment:
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+          enum:
+            - visible
+            - hidden
+            - reported
+        customerName:
+          type: string
+        replyText:
+          type:
+            - string
+            - "null"
+        replyAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - bookingId
+        - rating
+        - comment
+        - status
+        - customerName
+        - replyText
+        - replyAt
+        - createdAt
+      additionalProperties: false
+    PublicReview:
+      type: object
+      properties:
+        id:
+          type: string
+        rating:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        comment:
+          type:
+            - string
+            - "null"
+        customerName:
+          type: string
+        replyText:
+          type:
+            - string
+            - "null"
+        replyAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - rating
+        - comment
+        - customerName
+        - replyText
+        - replyAt
+        - createdAt
+      additionalProperties: false
+    NewReview:
+      type: object
+      properties:
+        id:
+          type: string
+        bookingId:
+          type: string
+        rating:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        comment:
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - bookingId
+        - rating
+        - comment
+        - status
+        - createdAt
+      additionalProperties: false
     Plan:
       type: object
       properties:
@@ -317,21 +1497,30 @@ components:
           type: string
         priceMonthlyPaise:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         priceAnnualPaise:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
         maxBranches:
-          type:
-            - integer
-            - "null"
+          anyOf:
+            - type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            - type: "null"
         maxStaff:
-          type:
-            - integer
-            - "null"
+          anyOf:
+            - type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            - type: "null"
         customRoles:
           type: boolean
         desktopAccess:
           type: boolean
         analyticsLevel:
+          type: string
           enum:
             - basic
             - full
@@ -341,6 +1530,433 @@ components:
           type: boolean
         trialDays:
           type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - code
+        - name
+        - priceMonthlyPaise
+        - priceAnnualPaise
+        - maxBranches
+        - maxStaff
+        - customRoles
+        - desktopAccess
+        - analyticsLevel
+        - csvExport
+        - billTemplates
+        - trialDays
+      additionalProperties: false
+    AdminPlan:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        priceMonthlyPaise:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        priceAnnualPaise:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        maxBranches:
+          anyOf:
+            - type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            - type: "null"
+        maxStaff:
+          anyOf:
+            - type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            - type: "null"
+        customRoles:
+          type: boolean
+        desktopAccess:
+          type: boolean
+        analyticsLevel:
+          type: string
+          enum:
+            - basic
+            - full
+        csvExport:
+          type: boolean
+        billTemplates:
+          type: boolean
+        trialDays:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        isActive:
+          type: boolean
+        razorpayPlanIdMonthly:
+          type:
+            - string
+            - "null"
+        razorpayPlanIdAnnual:
+          type:
+            - string
+            - "null"
+      required:
+        - code
+        - name
+        - priceMonthlyPaise
+        - priceAnnualPaise
+        - maxBranches
+        - maxStaff
+        - customRoles
+        - desktopAccess
+        - analyticsLevel
+        - csvExport
+        - billTemplates
+        - trialDays
+        - isActive
+        - razorpayPlanIdMonthly
+        - razorpayPlanIdAnnual
+      additionalProperties: false
+    SalonSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        city:
+          type:
+            - string
+            - "null"
+        addressLine:
+          type:
+            - string
+            - "null"
+        lat:
+          type:
+            - number
+            - "null"
+        lng:
+          type:
+            - number
+            - "null"
+        logoMediaId:
+          type:
+            - string
+            - "null"
+        ratingAvg:
+          type: number
+        ratingCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        distanceKm:
+          type:
+            - number
+            - "null"
+        startingPricePaise:
+          anyOf:
+            - type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            - type: "null"
+        categories:
+          type: array
+          items:
+            type: string
+      required:
+        - id
+        - name
+        - slug
+        - city
+        - addressLine
+        - lat
+        - lng
+        - logoMediaId
+        - ratingAvg
+        - ratingCount
+        - distanceKm
+        - startingPricePaise
+        - categories
+      additionalProperties: false
+    SalonDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        addressLine:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+        state:
+          type:
+            - string
+            - "null"
+        pincode:
+          type:
+            - string
+            - "null"
+        lat:
+          type:
+            - number
+            - "null"
+        lng:
+          type:
+            - number
+            - "null"
+        timezone:
+          type: string
+        logoMediaId:
+          type:
+            - string
+            - "null"
+        ratingAvg:
+          type: number
+        ratingCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        reviewCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        cancelCutoffMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        photoMediaIds:
+          type: array
+          items:
+            type: string
+        hours:
+          type: array
+          items:
+            type: object
+            properties:
+              weekday:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              opens:
+                type: string
+              closes:
+                type: string
+              isClosed:
+                type: boolean
+            required:
+              - weekday
+              - opens
+              - closes
+              - isClosed
+            additionalProperties: false
+        closures:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              reason:
+                type:
+                  - string
+                  - "null"
+            required:
+              - date
+              - reason
+            additionalProperties: false
+        services:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              templateId:
+                type:
+                  - string
+                  - "null"
+              category:
+                type: string
+              name:
+                type: string
+              description:
+                type:
+                  - string
+                  - "null"
+              audience:
+                type: string
+                enum:
+                  - all
+                  - men
+                  - women
+                  - kids
+              durationMin:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              bufferMin:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              pricePaise:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              isActive:
+                type: boolean
+              sort:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - id
+              - templateId
+              - category
+              - name
+              - description
+              - audience
+              - durationMin
+              - bufferMin
+              - pricePaise
+              - isActive
+              - sort
+            additionalProperties: false
+        staff:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              displayName:
+                type: string
+              photoMediaId:
+                type:
+                  - string
+                  - "null"
+              serviceIds:
+                type: array
+                items:
+                  type: string
+            required:
+              - id
+              - displayName
+              - photoMediaId
+              - serviceIds
+            additionalProperties: false
+      required:
+        - id
+        - name
+        - slug
+        - description
+        - phone
+        - addressLine
+        - city
+        - state
+        - pincode
+        - lat
+        - lng
+        - timezone
+        - logoMediaId
+        - ratingAvg
+        - ratingCount
+        - reviewCount
+        - cancelCutoffMin
+        - photoMediaIds
+        - hours
+        - closures
+        - services
+        - staff
+      additionalProperties: false
+    Hairstyle:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        audience:
+          type: string
+          enum:
+            - men
+            - women
+            - unisex
+        faceShapes:
+          type: array
+          items:
+            type: string
+        length:
+          type: string
+          enum:
+            - short
+            - medium
+            - long
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        imageMediaId:
+          type:
+            - string
+            - "null"
+        maintenance:
+          type: string
+          enum:
+            - low
+            - medium
+            - high
+        serviceTemplateIds:
+          type: array
+          items:
+            type: string
+      required:
+        - id
+        - name
+        - audience
+        - faceShapes
+        - length
+        - description
+        - tags
+        - imageMediaId
+        - maintenance
+        - serviceTemplateIds
+      additionalProperties: false
+    Slot:
+      type: object
+      properties:
+        staffId:
+          type: string
+        startsAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        endsAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - staffId
+        - startsAt
+        - endsAt
+      additionalProperties: false
     Availability:
       type: object
       properties:
@@ -355,13 +1971,277 @@ components:
             properties:
               staffId:
                 type: string
-                format: uuid
               startsAt:
                 type: string
-                format: date-time
+                description: ISO-8601 UTC timestamp
               endsAt:
                 type: string
-                format: date-time
+                description: ISO-8601 UTC timestamp
+            required:
+              - staffId
+              - startsAt
+              - endsAt
+            additionalProperties: false
+      required:
+        - date
+        - timezone
+        - slots
+      additionalProperties: false
+    Receipt:
+      type: object
+      properties:
+        id:
+          type: string
+        receiptNo:
+          type: string
+        amountPaise:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        periodStart:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        periodEnd:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        razorpayPaymentId:
+          type: string
+        issuedAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        kind:
+          type: string
+          const: receipt
+      required:
+        - id
+        - receiptNo
+        - amountPaise
+        - periodStart
+        - periodEnd
+        - razorpayPaymentId
+        - issuedAt
+        - kind
+      additionalProperties: false
+    SubscriptionView:
+      type: object
+      properties:
+        planCode:
+          type: string
+        interval:
+          type: string
+          enum:
+            - monthly
+            - annual
+        status:
+          type: string
+          enum:
+            - trialing
+            - active
+            - past_due
+            - halted
+            - cancelled
+            - expired
+        trialEndsAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        currentPeriodEnd:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        compUntil:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        cancelAtPeriodEnd:
+          type: boolean
+        razorpaySubscriptionId:
+          type:
+            - string
+            - "null"
+        paymentMethodAuthorized:
+          type: boolean
+          description: true once the customer authorised the Razorpay mandate (subscription.authenticated), even while still trialing
+        nextChargeAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+          description: when Razorpay will take the next (first, during a trial) charge, if known
+        entitlements:
+          type: object
+          properties:
+            planCode:
+              type: string
+            status:
+              type: string
+            readOnly:
+              type: boolean
+            graceEndsAt:
+              anyOf:
+                - type: string
+                  description: ISO-8601 UTC timestamp
+                - type: "null"
+            limits:
+              type: object
+              properties:
+                maxBranches:
+                  anyOf:
+                    - type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    - type: "null"
+                maxStaff:
+                  anyOf:
+                    - type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    - type: "null"
+                customRoles:
+                  type: boolean
+                desktopAccess:
+                  type: boolean
+                analyticsLevel:
+                  type: string
+                  enum:
+                    - basic
+                    - full
+                csvExport:
+                  type: boolean
+                billTemplates:
+                  type: boolean
+              required:
+                - maxBranches
+                - maxStaff
+                - customRoles
+                - desktopAccess
+                - analyticsLevel
+                - csvExport
+                - billTemplates
+              additionalProperties: false
+          required:
+            - planCode
+            - status
+            - readOnly
+            - graceEndsAt
+            - limits
+          additionalProperties: false
+        limits:
+          type: object
+          properties:
+            maxBranches:
+              anyOf:
+                - type: integer
+                  minimum: -9007199254740991
+                  maximum: 9007199254740991
+                - type: "null"
+            maxStaff:
+              anyOf:
+                - type: integer
+                  minimum: -9007199254740991
+                  maximum: 9007199254740991
+                - type: "null"
+            customRoles:
+              type: boolean
+            desktopAccess:
+              type: boolean
+            analyticsLevel:
+              type: string
+              enum:
+                - basic
+                - full
+            csvExport:
+              type: boolean
+            billTemplates:
+              type: boolean
+          required:
+            - maxBranches
+            - maxStaff
+            - customRoles
+            - desktopAccess
+            - analyticsLevel
+            - csvExport
+            - billTemplates
+          additionalProperties: false
+        usage:
+          type: object
+          properties:
+            activeStaff:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            customRoles:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+          required:
+            - activeStaff
+            - customRoles
+          additionalProperties: false
+        recentReceipts:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              receiptNo:
+                type: string
+              amountPaise:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              periodStart:
+                anyOf:
+                  - type: string
+                    description: ISO-8601 UTC timestamp
+                  - type: "null"
+              periodEnd:
+                anyOf:
+                  - type: string
+                    description: ISO-8601 UTC timestamp
+                  - type: "null"
+              razorpayPaymentId:
+                type: string
+              issuedAt:
+                type: string
+                description: ISO-8601 UTC timestamp
+              kind:
+                type: string
+                const: receipt
+            required:
+              - id
+              - receiptNo
+              - amountPaise
+              - periodStart
+              - periodEnd
+              - razorpayPaymentId
+              - issuedAt
+              - kind
+            additionalProperties: false
+      required:
+        - planCode
+        - interval
+        - status
+        - trialEndsAt
+        - currentPeriodEnd
+        - compUntil
+        - cancelAtPeriodEnd
+        - razorpaySubscriptionId
+        - paymentMethodAuthorized
+        - nextChargeAt
+        - entitlements
+        - limits
+        - usage
+        - recentReceipts
+      additionalProperties: false
     CheckoutResult:
       type: object
       properties:
@@ -369,132 +2249,1159 @@ components:
           type: string
         keyId:
           type: string
+      required:
+        - razorpaySubscriptionId
+        - keyId
+      additionalProperties: false
+    AnalyticsSummary:
+      type: object
+      properties:
+        level:
+          type: string
+          enum:
+            - basic
+            - full
+        range:
+          type: object
+          properties:
+            from:
+              type: string
+            to:
+              type: string
+            timezone:
+              type: string
+          required:
+            - from
+            - to
+            - timezone
+          additionalProperties: false
+        totals:
+          type: object
+          properties:
+            bookings:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            completed:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            noShows:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            cancelled:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            revenuePaise:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            invoices:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+          required:
+            - bookings
+            - completed
+            - noShows
+            - cancelled
+            - revenuePaise
+            - invoices
+          additionalProperties: false
+        byService:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              qty:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              revenuePaise:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - name
+              - qty
+              - revenuePaise
+            additionalProperties: false
+        byStaff:
+          type: array
+          items:
+            type: object
+            properties:
+              staffId:
+                type: string
+              displayName:
+                type: string
+              bookings:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              completed:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              noShows:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              revenuePaise:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - staffId
+              - displayName
+              - bookings
+              - completed
+              - noShows
+              - revenuePaise
+            additionalProperties: false
+        hourlyHeatMap:
+          type: array
+          items:
+            type: object
+            properties:
+              weekday:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+                description: 0=Sunday
+              hour:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              bookings:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - weekday
+              - hour
+              - bookings
+            additionalProperties: false
+        repeatCustomers:
+          type: object
+          properties:
+            customers:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            repeat:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            rate:
+              type: number
+          required:
+            - customers
+            - repeat
+            - rate
+          additionalProperties: false
+        repeatCustomerRate:
+          description: same as repeatCustomers.rate (0..1)
+          type: number
+        dailySeries:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              bookings:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              completed:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              revenuePaise:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - date
+              - bookings
+              - completed
+              - revenuePaise
+            additionalProperties: false
+      required:
+        - level
+        - range
+        - totals
+      additionalProperties: false
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        customerId:
+          type:
+            - string
+            - "null"
+        bookings:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        visits:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        noShows:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        lastVisitAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        totalSpentPaise:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - id
+        - name
+        - phone
+        - customerId
+        - bookings
+        - visits
+        - noShows
+        - lastVisitAt
+        - totalSpentPaise
+      additionalProperties: false
+    CustomerDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        bookings:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              status:
+                type: string
+              startsAt:
+                type: string
+                description: ISO-8601 UTC timestamp
+              totalPricePaise:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              staffName:
+                type: string
+            required:
+              - id
+              - status
+              - startsAt
+              - totalPricePaise
+              - staffName
+            additionalProperties: false
+        invoices:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              invoiceNo:
+                type: string
+              totalPaise:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              status:
+                type: string
+              createdAt:
+                type: string
+                description: ISO-8601 UTC timestamp
+            required:
+              - id
+              - invoiceNo
+              - totalPaise
+              - status
+              - createdAt
+            additionalProperties: false
+      required:
+        - id
+        - name
+        - phone
+        - bookings
+        - invoices
+      additionalProperties: false
+    ExportJob:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - done
+            - failed
+        error:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        finishedAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        downloadPath:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - kind
+        - status
+        - error
+        - createdAt
+        - finishedAt
+        - downloadPath
+      additionalProperties: false
+    ExportStarted:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          const: queued
+      required:
+        - jobId
+        - status
+      additionalProperties: false
+    AdminSalon:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        addressLine:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+        state:
+          type:
+            - string
+            - "null"
+        pincode:
+          type:
+            - string
+            - "null"
+        lat:
+          type:
+            - number
+            - "null"
+        lng:
+          type:
+            - number
+            - "null"
+        timezone:
+          type: string
+        logoMediaId:
+          type:
+            - string
+            - "null"
+        brandColor:
+          type:
+            - string
+            - "null"
+        billFooter:
+          type:
+            - string
+            - "null"
+        gstin:
+          type:
+            - string
+            - "null"
+        gstEnabled:
+          type: boolean
+        invoicePrefix:
+          type: string
+        cancelCutoffMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        ratingAvg:
+          type: number
+        ratingCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        status:
+          type: string
+          enum:
+            - pending
+            - approved
+            - suspended
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        subscription:
+          type: object
+          properties:
+            status:
+              type: string
+            planCode:
+              type: string
+            trialEndsAt:
+              anyOf:
+                - type: string
+                  description: ISO-8601 UTC timestamp
+                - type: "null"
+            compUntil:
+              anyOf:
+                - type: string
+                  description: ISO-8601 UTC timestamp
+                - type: "null"
+          required:
+            - status
+            - planCode
+            - trialEndsAt
+            - compUntil
+          additionalProperties: false
+        owner:
+          type: object
+          properties:
+            name:
+              type:
+                - string
+                - "null"
+            email:
+              type:
+                - string
+                - "null"
+            phone:
+              type:
+                - string
+                - "null"
+          required:
+            - name
+            - email
+            - phone
+          additionalProperties: false
+      required:
+        - id
+        - name
+        - slug
+        - description
+        - phone
+        - addressLine
+        - city
+        - state
+        - pincode
+        - lat
+        - lng
+        - timezone
+        - logoMediaId
+        - brandColor
+        - billFooter
+        - gstin
+        - gstEnabled
+        - invoicePrefix
+        - cancelCutoffMin
+        - ratingAvg
+        - ratingCount
+        - status
+        - createdAt
+        - subscription
+        - owner
+      additionalProperties: false
+    AdminSalonDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        addressLine:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+        state:
+          type:
+            - string
+            - "null"
+        pincode:
+          type:
+            - string
+            - "null"
+        lat:
+          type:
+            - number
+            - "null"
+        lng:
+          type:
+            - number
+            - "null"
+        timezone:
+          type: string
+        logoMediaId:
+          type:
+            - string
+            - "null"
+        brandColor:
+          type:
+            - string
+            - "null"
+        billFooter:
+          type:
+            - string
+            - "null"
+        gstin:
+          type:
+            - string
+            - "null"
+        gstEnabled:
+          type: boolean
+        invoicePrefix:
+          type: string
+        cancelCutoffMin:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        ratingAvg:
+          type: number
+        ratingCount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        status:
+          type: string
+          enum:
+            - pending
+            - approved
+            - suspended
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        subscription:
+          type: object
+          properties:
+            planCode:
+              type: string
+            interval:
+              type: string
+            status:
+              type: string
+            trialEndsAt:
+              anyOf:
+                - type: string
+                  description: ISO-8601 UTC timestamp
+                - type: "null"
+            currentPeriodEnd:
+              anyOf:
+                - type: string
+                  description: ISO-8601 UTC timestamp
+                - type: "null"
+            compUntil:
+              anyOf:
+                - type: string
+                  description: ISO-8601 UTC timestamp
+                - type: "null"
+            cancelAtPeriodEnd:
+              type: boolean
+          required:
+            - planCode
+            - interval
+            - status
+            - trialEndsAt
+            - currentPeriodEnd
+            - compUntil
+            - cancelAtPeriodEnd
+          additionalProperties: false
+        staff:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              displayName:
+                type: string
+              roleName:
+                type: string
+              isActive:
+                type: boolean
+              email:
+                type:
+                  - string
+                  - "null"
+              phone:
+                type:
+                  - string
+                  - "null"
+            required:
+              - id
+              - displayName
+              - roleName
+              - isActive
+              - email
+              - phone
+            additionalProperties: false
+        counts:
+          type: object
+          properties:
+            bookings:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            invoices:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            services:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+          required:
+            - bookings
+            - invoices
+            - services
+          additionalProperties: false
+      required:
+        - id
+        - name
+        - slug
+        - description
+        - phone
+        - addressLine
+        - city
+        - state
+        - pincode
+        - lat
+        - lng
+        - timezone
+        - logoMediaId
+        - brandColor
+        - billFooter
+        - gstin
+        - gstEnabled
+        - invoicePrefix
+        - cancelCutoffMin
+        - ratingAvg
+        - ratingCount
+        - status
+        - createdAt
+        - subscription
+        - staff
+        - counts
+      additionalProperties: false
+    CompResult:
+      type: object
+      properties:
+        salonId:
+          type: string
+        compUntil:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        trialEndsAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+        status:
+          type: string
+        planCode:
+          type: string
+      required:
+        - salonId
+        - compUntil
+        - trialEndsAt
+        - status
+        - planCode
+      additionalProperties: false
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: string
+        fullName:
+          type: string
+        email:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        role:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - fullName
+        - email
+        - phone
+        - role
+        - isActive
+        - createdAt
+      additionalProperties: false
+    AdminStats:
+      type: object
+      properties:
+        customers:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        salons:
+          type: object
+          properties:
+            total:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            pending:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            approved:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+          required:
+            - total
+            - pending
+            - approved
+          additionalProperties: false
+        subscriptions:
+          type: object
+          properties:
+            active:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            trialing:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            troubled:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+          required:
+            - active
+            - trialing
+            - troubled
+          additionalProperties: false
+        bookingsLast30Days:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        newContactMessages:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        subscriptionReceiptsLast30DaysPaise:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        leads:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - customers
+        - salons
+        - subscriptions
+        - bookingsLast30Days
+        - newContactMessages
+        - subscriptionReceiptsLast30DaysPaise
+        - leads
+      additionalProperties: false
+    AuditEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        actorUserId:
+          type:
+            - string
+            - "null"
+        salonId:
+          type:
+            - string
+            - "null"
+        action:
+          type: string
+        entity:
+          type:
+            - string
+            - "null"
+        entityId:
+          type:
+            - string
+            - "null"
+        meta:
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties: {}
+        ip:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - actorUserId
+        - salonId
+        - action
+        - entity
+        - entityId
+        - meta
+        - ip
+        - createdAt
+      additionalProperties: false
+    ContactMessage:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type:
+            - string
+            - "null"
+        salonName:
+          type:
+            - string
+            - "null"
+        message:
+          type: string
+        status:
+          type: string
+          enum:
+            - new
+            - handled
+        assignedTo:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - name
+        - email
+        - phone
+        - salonName
+        - message
+        - status
+        - assignedTo
+        - createdAt
+      additionalProperties: false
+    Lead:
+      type: object
+      properties:
+        id:
+          type: string
+        salonName:
+          type: string
+        ownerName:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        email:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+        source:
+          type:
+            - string
+            - "null"
+        stage:
+          type: string
+          enum:
+            - new
+            - contacted
+            - trial
+            - subscribed
+            - lost
+        ownerAgentId:
+          type:
+            - string
+            - "null"
+        notes:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        updatedAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - id
+        - salonName
+        - ownerName
+        - phone
+        - email
+        - city
+        - source
+        - stage
+        - ownerAgentId
+        - notes
+        - createdAt
+        - updatedAt
+      additionalProperties: false
+    Pipeline:
+      type: object
+      properties:
+        stages:
+          type: array
+          items:
+            type: object
+            properties:
+              stage:
+                type: string
+                enum:
+                  - new
+                  - contacted
+                  - trial
+                  - subscribed
+                  - lost
+              count:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - stage
+              - count
+            additionalProperties: false
+        total:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - stages
+        - total
+      additionalProperties: false
+    Invite:
+      type: object
+      properties:
+        code:
+          type: string
+        url:
+          type: string
+        expiresAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+      required:
+        - code
+        - url
+        - expiresAt
+      additionalProperties: false
+    InvitePrefill:
+      type: object
+      properties:
+        salonName:
+          type: string
+        ownerName:
+          type:
+            - string
+            - "null"
+        phone:
+          type:
+            - string
+            - "null"
+        email:
+          type:
+            - string
+            - "null"
+        city:
+          type:
+            - string
+            - "null"
+      required:
+        - salonName
+        - ownerName
+        - phone
+        - email
+        - city
+      additionalProperties: false
+    QueueHealth:
+      type: object
+      properties:
+        driver:
+          type: string
+          enum:
+            - pgboss
+            - memory
+            - inline
+        depth:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        maxDepth:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        workerMode:
+          type: string
+          enum:
+            - api
+            - worker
+            - both
+        jobs:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              queued:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              active:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              failed:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+            required:
+              - name
+              - queued
+              - active
+              - failed
+            additionalProperties: false
+        unprocessedWebhookEvents:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - driver
+        - depth
+        - maxDepth
+        - workerMode
+        - jobs
+        - unprocessedWebhookEvents
+      additionalProperties: false
     MediaId:
       type: object
       properties:
         id:
           type: string
-          format: uuid
-    Hairstyle:
+      required:
+        - id
+      additionalProperties: false
+    Ok:
       type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Hairstyle
-    ServiceTemplate:
+      properties:
+        ok:
+          type: boolean
+          const: true
+      required:
+        - ok
+      additionalProperties: false
+    WebhookAck:
       type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of ServiceTemplate
-    Permission:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Permission
-    MeResult:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of MeResult
-    SalonSummary:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of SalonSummary
-    SalonDetail:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of SalonDetail
-    Review:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Review
-    Salon:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Salon
-    Hours:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Hours
-    Closure:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Closure
-    Service:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Service
-    ServiceIds:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of ServiceIds
-    Staff:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Staff
-    StaffHours:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of StaffHours
-    TimeOff:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of TimeOff
-    Role:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Role
-    PaymentMethod:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of PaymentMethod
-    AnalyticsSummary:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of AnalyticsSummary
-    Customer:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Customer
-    CustomerDetail:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of CustomerDetail
-    SubscriptionView:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of SubscriptionView
-    Receipt:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Receipt
-    AdminSalon:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of AdminSalon
-    ContactMessage:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of ContactMessage
-    AdminUser:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of AdminUser
-    AdminStats:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of AdminStats
-    AuditEntry:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of AuditEntry
-    Lead:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Lead
-    Invite:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Invite
-    Pipeline:
-      type: object
-      additionalProperties: true
-      description: See spec §6 for the shape of Pipeline
+      properties:
+        received:
+          type: boolean
+          const: true
+        result:
+          type: string
+          enum:
+            - queued
+            - duplicate
+      required:
+        - received
+        - result
+      additionalProperties: false
 paths:
   /plans:
     get:
@@ -578,7 +3485,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -752,7 +3659,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/InvitePrefill"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1049,7 +3956,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1077,7 +3984,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1123,7 +4030,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1223,7 +4130,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1272,7 +4179,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1396,7 +4303,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1582,7 +4489,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Review"
+                      $ref: "#/components/schemas/PublicReview"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -1600,7 +4507,7 @@ paths:
       tags:
         - Discover
       summary: Bookable slots for services on a date
-      description: Slots are on a 15-minute grid in the salon timezone; duration = Σ(duration×staff speed rounded up to 5 min)+buffers
+      description: "Slots are on a 15-minute grid in the salon timezone; duration = sum(duration x staff speed rounded up to 5 min) + buffers. Advisory: the hold decides. Do not poll faster than every 10 s."
       operationId: get_salons_salonId_availability
       parameters:
         - name: salonId
@@ -1671,7 +4578,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    $ref: "#/components/schemas/Salon"
+                    $ref: "#/components/schemas/SalonFull"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -2028,7 +4935,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -2280,7 +5187,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -2887,7 +5794,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -3080,7 +5987,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -3098,7 +6005,7 @@ paths:
       tags:
         - Bookings
       summary: Hold a slot for 5 minutes
-      description: 409 SLOT_TAKEN when the staff member is already booked/held
+      description: "409 SLOT_TAKEN when the staff member is already booked/held (details.alternatives lists the next free starts). Caps: max 3 active holds, 10 upcoming confirmed bookings, 5 bookings created per 24 h per customer (409 CONFLICT, reason HOLD_LIMIT / UPCOMING_LIMIT / DAILY_LIMIT). Rate limited per user."
       operationId: post_bookings_hold
       parameters:
         - name: Idempotency-Key
@@ -3383,7 +6290,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    $ref: "#/components/schemas/Review"
+                    $ref: "#/components/schemas/NewReview"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -3792,7 +6699,7 @@ paths:
       tags:
         - Salon bookings
       summary: Check a customer in by QR token (atomic)
-      description: Requires salon permission `checkin.scan`. 409 ALREADY_CHECKED_IN on a second scan; 403 for another salon's QR; 409 OUT_OF_WINDOW outside [start-30m, end+60m]. Works in read-only mode.
+      description: Requires salon permission `checkin.scan`. 409 ALREADY_CHECKED_IN on a second scan; 403 for another salon's QR; 409 OUT_OF_WINDOW outside [start-30m, end+60m]. Works in read-only mode. Rate limited per salon.
       operationId: post_salons_salonId_checkin
       parameters:
         - name: salonId
@@ -4223,7 +7130,7 @@ paths:
                       upiId:
                         anyOf:
                           - type: string
-                            pattern: ^[\w.\-]{2,}@[A-Za-z]{2,}$
+                            pattern: ^[\w.-]{2,}@[A-Za-z]{2,}$
                           - type: "null"
                     required:
                       - code
@@ -4294,7 +7201,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Review"
+                      $ref: "#/components/schemas/SalonReview"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -4349,7 +7256,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    $ref: "#/components/schemas/Review"
+                    $ref: "#/components/schemas/SalonReview"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -4398,7 +7305,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -4463,7 +7370,7 @@ paths:
       tags:
         - Analytics
       summary: CSV export of invoices in range
-      description: Requires salon permission `analytics.view`. Requires the csv_export entitlement (Pro). Allowed in read-only mode.
+      description: Requires salon permission `analytics.view`. Requires the csv_export entitlement (Pro). Allowed in read-only mode. Ranges over 92 days return 202 {jobId} - poll GET /salons/:salonId/jobs/:jobId.
       operationId: get_salons_salonId_analytics_export_csv
       parameters:
         - name: salonId
@@ -4484,6 +7391,133 @@ paths:
           schema:
             type: string
             pattern: ^\d{4}-\d{2}-\d{2}$
+      responses:
+        "200":
+          description: text/csv
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-permission: analytics.view
+  /salons/{salonId}/analytics/export:
+    post:
+      tags:
+        - Analytics
+      summary: Start an asynchronous invoice CSV export (202 + jobId)
+      description: Requires salon permission `analytics.view`. Requires the csv_export entitlement (Pro). Poll GET /salons/:salonId/jobs/:jobId, then download.
+      operationId: post_salons_salonId_analytics_export
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from:
+                  type: string
+                  pattern: ^\d{4}-\d{2}-\d{2}$
+                to:
+                  type: string
+                  pattern: ^\d{4}-\d{2}-\d{2}$
+              additionalProperties: false
+      responses:
+        "202":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ExportStarted"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-permission: analytics.view
+  /salons/{salonId}/jobs/{jobId}:
+    get:
+      tags:
+        - Analytics
+      summary: Status of an asynchronous export job
+      description: Requires salon permission `analytics.view`.
+      operationId: get_salons_salonId_jobs_jobId
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ExportJob"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-permission: analytics.view
+  /salons/{salonId}/jobs/{jobId}/download:
+    get:
+      tags:
+        - Analytics
+      summary: Download the finished export (CSV)
+      description: Requires salon permission `analytics.view`.
+      operationId: get_salons_salonId_jobs_jobId_download
+      parameters:
+        - name: salonId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
           description: text/csv
@@ -4791,8 +7825,8 @@ paths:
     post:
       tags:
         - Webhooks
-      summary: Razorpay webhook (signature verified, idempotent)
-      description: Header X-Razorpay-Signature = HMAC-SHA256(raw body, RAZORPAY_WEBHOOK_SECRET); X-Razorpay-Event-Id dedupes replays
+      summary: Razorpay webhook (signature verified, stored idempotently, processed by a job)
+      description: "Header X-Razorpay-Signature = HMAC-SHA256(raw body, RAZORPAY_WEBHOOK_SECRET); X-Razorpay-Event-Id dedupes replays. Responds 200 {received, result: queued|duplicate}."
       operationId: post_webhooks_razorpay
       parameters: []
       responses:
@@ -4804,7 +7838,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/WebhookAck"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -4898,7 +7932,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    $ref: "#/components/schemas/AdminSalon"
+                    $ref: "#/components/schemas/AdminSalonDetail"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -4977,7 +8011,7 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Plan"
+                      $ref: "#/components/schemas/AdminPlan"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -5108,7 +8142,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    $ref: "#/components/schemas/AdminSalon"
+                    $ref: "#/components/schemas/CompResult"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -5508,7 +8542,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -5745,7 +8779,35 @@ paths:
                 type: object
                 properties:
                   data:
+                    $ref: "#/components/schemas/Ok"
+                  meta:
                     type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/queue:
+    get:
+      tags:
+        - Admin
+      summary: Background queue health (driver, depth, failed jobs, unprocessed webhook events)
+      operationId: get_admin_queue
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/QueueHealth"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
@@ -6023,7 +9085,7 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: object
+                    $ref: "#/components/schemas/Ok"
                   meta:
                     type: object
                     description: "Pagination: limit, nextCursor"
