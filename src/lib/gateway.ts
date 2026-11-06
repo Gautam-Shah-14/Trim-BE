@@ -1,5 +1,6 @@
 import Razorpay from 'razorpay';
 import type { Config } from '../config.js';
+import { CircuitBreaker, withTimeout } from '../infra/resilience.js';
 
 export interface CreateSubscriptionInput {
   planId: string;
@@ -16,6 +17,29 @@ export interface PaymentGateway {
   cancelSubscription(subscriptionId: string, atCycleEnd: boolean): Promise<void>;
 }
 
+/** Wraps any gateway with a timeout and a circuit breaker (5 consecutive failures open it for 30 s). Cancel is retried (idempotent), create is not. */
+export function protectGateway(inner: PaymentGateway, o: { timeoutMs?: number; breaker?: CircuitBreaker } = {}): PaymentGateway {
+  const breaker = o.breaker ?? new CircuitBreaker(5, 30_000);
+  const timeout = o.timeoutMs ?? 10_000;
+  const call = <T>(fn: () => Promise<T>, what: string) => breaker.run(() => withTimeout(fn(), timeout, what));
+  return {
+    keyId: inner.keyId,
+    createSubscription: (input) => call(() => inner.createSubscription(input), 'razorpay create subscription'),
+    async cancelSubscription(id, atCycleEnd) {
+      let last: unknown;
+      for (let i = 0; i < 3; i++) {
+        try {
+          return await call(() => inner.cancelSubscription(id, atCycleEnd), 'razorpay cancel subscription');
+        } catch (err) {
+          last = err;
+          await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+        }
+      }
+      throw last;
+    },
+  };
+}
+
 export function createRazorpayGateway(cfg: Config['razorpay']): PaymentGateway {
   let client: Razorpay | null = null;
   const get = () => {
@@ -25,7 +49,7 @@ export function createRazorpayGateway(cfg: Config['razorpay']): PaymentGateway {
     client ??= new Razorpay({ key_id: cfg.keyId, key_secret: cfg.keySecret });
     return client;
   };
-  return {
+  return protectGateway({
     keyId: cfg.keyId,
     async createSubscription(input) {
       const sub = await get().subscriptions.create({
@@ -40,5 +64,5 @@ export function createRazorpayGateway(cfg: Config['razorpay']): PaymentGateway {
     async cancelSubscription(subscriptionId, atCycleEnd) {
       await get().subscriptions.cancel(subscriptionId, atCycleEnd);
     },
-  };
+  });
 }

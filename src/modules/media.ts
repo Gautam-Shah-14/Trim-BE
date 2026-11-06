@@ -1,5 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { Api, authenticate, send } from '../http/api.js';
+import { Api, authenticate, bumpSalon, send } from '../http/api.js';
 import { parse, z, uuid } from '../http/validate.js';
 import { E } from '../errors.js';
 import { sha256Hex } from '../lib/security.js';
@@ -68,6 +68,7 @@ export function register(api: Api) {
       'INSERT INTO media (owner_user_id, salon_id, kind, mime, byte_size, data_base64, sha256) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',
       [req.auth!.userId, b.salonId ?? null, b.kind, real, bytes.byteLength, b64, sha256Hex(bytes)],
     );
+    bumpSalon(res, b.salonId);
     send(res, { id: r.rows[0]!.id }, undefined, 201);
   });
 
@@ -92,6 +93,8 @@ export function register(api: Api) {
 
   api.delete('/media/:id', { summary: 'Delete an image you uploaded', tag: 'Media', auth: 'user' }, async (req, res) => {
     const id = parse(uuid, req.params['id']);
+    const owner = await deps.pool.query<{ salon_id: string | null }>('SELECT salon_id FROM media WHERE id = $1', [id]);
+    bumpSalon(res, owner.rows[0]?.salon_id);
     const r = await deps.pool.query(
       `DELETE FROM media WHERE id = $1 AND (owner_user_id = $2 OR $3 = 'admin'
          OR EXISTS (SELECT 1 FROM salon_staff st JOIN salon_role_permissions p ON p.role_id = st.role_id

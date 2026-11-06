@@ -16,7 +16,7 @@ if (!/^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(ADMIN_PASSWORD)) {
   console.error('ADMIN_PASSWORD must be at least 8 characters with a letter and a digit.');
   process.exit(1);
 }
-const pool = createPool({ url: DATABASE_URL, ssl: ['true', '1'].includes(process.env['DATABASE_SSL'] ?? ''), max: 2 });
+const pool = createPool({ url: DATABASE_URL, ssl: ['true', '1'].includes(process.env['DATABASE_SSL'] ?? ''), sslCaFile: process.env['DATABASE_SSL_CA_FILE'] || undefined, max: 2 });
 try {
   const hash = await makePasswordHasher(19456).hash(ADMIN_PASSWORD);
   const r = await pool.query(

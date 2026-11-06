@@ -1,4 +1,4 @@
-import { Api, send } from '../http/api.js';
+import { Api, bumpUser, send } from '../http/api.js';
 import { parse, z, str, uuid } from '../http/validate.js';
 import { E } from '../errors.js';
 import { withTx } from '../db.js';
@@ -61,6 +61,7 @@ export function register(api: Api) {
       await c.query('DELETE FROM media WHERE owner_user_id = $1 AND kind = \'avatar\'', [id]);
       await c.query('UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [id]);
     });
+    bumpUser(res, id);
     await auditReq(req, { action: 'user.deleted', entity: 'user', entityId: id });
     send(res, { ok: true });
   });

@@ -87,7 +87,7 @@ export const hoursDto = (h: Record<string, any>) => ({
 export function register(api: Api) {
   const { deps } = api;
 
-  api.get('/salons/:salonId', { summary: 'Salon profile (any member)', tag: 'Salon', auth: 'salon', returns: 'Salon' }, async (req, res) => {
+  api.get('/salons/:salonId', { summary: 'Salon profile (any member)', tag: 'Salon', auth: 'salon', returns: 'SalonFull' }, async (req, res) => {
     const ctx = req.salonCtx!;
     const s = await deps.pool.query('SELECT * FROM salons WHERE id = $1', [ctx.salonId]);
     const photos = await deps.pool.query("SELECT id FROM media WHERE salon_id = $1 AND kind = 'salon_photo' ORDER BY created_at", [ctx.salonId]);

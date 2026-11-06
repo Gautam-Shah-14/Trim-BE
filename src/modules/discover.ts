@@ -1,8 +1,12 @@
 import { Api, send } from '../http/api.js';
+import { sendCached } from '../http/httpCache.js';
+import { userLimiter } from '../http/rateLimit.js';
+import { computeAvailability } from '../lib/availability.js';
 import { parse, z, uuid, dateStr, commaIds, pageQuery, keysetFrom, pageOf, decodeCursor, encodeCursor } from '../http/validate.js';
 import { E } from '../errors.js';
-import { loadSalonEnt, planBooking, sweepExpiredHolds, MAX_DAYS_AHEAD } from '../lib/booking.js';
-import { addDays, computeSlots, isValidDateString, localDateOf, localDayRange, weekdayOf, workingWindows, type Interval } from '../lib/slots.js';
+import { loadSalonEnt, sweepExpiredHolds, MAX_DAYS_AHEAD } from '../lib/booking.js';
+import { addDays, isValidDateString, localDateOf } from '../lib/slots.js';
+import { createHash } from 'node:crypto';
 import { hoursDto } from './salon.js';
 import { serviceDto } from './services.js';
 
@@ -39,11 +43,23 @@ export function register(api: Api) {
     const sort = q.sort ?? (hasGeo ? 'distance' : 'rating');
     if (sort === 'distance' && !hasGeo) throw E.validation('sort=distance needs lat and lng', [{ field: 'sort', issue: 'requires lat/lng' }]);
     const offset = decodeCursor<{ o: number }>(q.cursor)?.o ?? 0;
-    const params: unknown[] = hasGeo ? [q.lat, q.lng] : [];
+    // the caller position is snapped to a ~110 m grid: shared cache cells, distances accurate to ~0.1 km
+    const lat = hasGeo ? Math.round(q.lat! * 1000) / 1000 : undefined;
+    const lng = hasGeo ? Math.round(q.lng! * 1000) / 1000 : undefined;
+    const ver = await deps.cache.version('discover');
+    const key = `disc:v${ver}:${createHash('sha1').update(JSON.stringify({ ...q, lat, lng, sort })).digest('hex')}`;
+    const body = await deps.cache.getOrLoad(key, deps.config.cacheTtl.discover, async () => {
+    const params: unknown[] = hasGeo ? [lat, lng] : [];
     const where: string[] = [`s.status = 'approved'`, DISCOVERABLE_SQL];
     if (hasGeo) {
-      params.push(q.radiusKm ?? 25);
-      where.push(`s.lat IS NOT NULL AND s.lng IS NOT NULL AND ${HAVERSINE} <= $${params.length}`);
+      const radius = q.radiusKm ?? 25;
+      // bounding-box prefilter (uses the salons_geo_idx btree) before the exact haversine check
+      const dLat = radius / 111.32;
+      const dLng = radius / (111.32 * Math.max(0.01, Math.cos((lat! * Math.PI) / 180)));
+      params.push(radius, lat! - dLat, lat! + dLat, lng! - dLng, lng! + dLng);
+      const n = params.length;
+      where.push(`s.lat BETWEEN $${n - 3} AND $${n - 2} AND s.lng BETWEEN $${n - 1} AND $${n}`);
+      where.push(`${HAVERSINE} <= $${n - 4}`);
     }
     if (q.q) {
       params.push(`%${q.q.replace(/[%_\\]/g, '\\$&')}%`);
@@ -76,20 +92,23 @@ export function register(api: Api) {
     );
     const hasMore = r.rows.length > q.limit;
     const rows = hasMore ? r.rows.slice(0, q.limit) : r.rows;
-    send(
-      res,
-      rows.map((s) => ({
+    return {
+      data: rows.map((s) => ({
         id: s.id, name: s.name, slug: s.slug, city: s.city, addressLine: s.address_line, lat: s.lat, lng: s.lng,
         logoMediaId: s.logo_media_id, ratingAvg: s.rating_avg, ratingCount: s.rating_count,
         distanceKm: s.distance_km === null ? null : Math.round(s.distance_km * 10) / 10,
         startingPricePaise: s.starting_price_paise, categories: s.categories,
       })),
-      { limit: q.limit, nextCursor: hasMore ? encodeCursor({ o: offset + q.limit }) : null },
-    );
+      meta: { limit: q.limit, nextCursor: hasMore ? encodeCursor({ o: offset + q.limit }) : null },
+    };
+    });
+    sendCached(req, res, body, { maxAge: 30, swr: 60 });
   });
 
   api.get('/discover/salons/:salonId', { summary: 'Public salon profile', tag: 'Discover', auth: 'none', returns: 'SalonDetail' }, async (req, res) => {
     const salonId = parse(uuid, req.params['salonId']);
+    const sv = await deps.cache.version(`salon:${salonId}`);
+    const body = await deps.cache.getOrLoad(`pub:salon:${salonId}:v${sv}`, deps.config.cacheTtl.salonPublic, async () => {
     const s = await deps.pool.query(
       `SELECT s.* FROM salons s JOIN subscriptions sub ON sub.salon_id = s.id WHERE s.id = $1 AND s.status = 'approved' AND ${DISCOVERABLE_SQL}`,
       [salonId],
@@ -110,7 +129,7 @@ export function register(api: Api) {
       deps.pool.query("SELECT to_char(date,'YYYY-MM-DD') AS date, reason FROM salon_closures WHERE salon_id = $1 AND date >= current_date ORDER BY date LIMIT 30", [salonId]),
     ]);
     const allIds = services.rows.map((x) => x.id);
-    send(res, {
+    return { data: {
       id: salon.id, name: salon.name, slug: salon.slug, description: salon.description, phone: salon.phone, addressLine: salon.address_line,
       city: salon.city, state: salon.state, pincode: salon.pincode, lat: salon.lat, lng: salon.lng, timezone: salon.timezone,
       logoMediaId: salon.logo_media_id, ratingAvg: salon.rating_avg, ratingCount: salon.rating_count, reviewCount: salon.rating_count,
@@ -121,11 +140,13 @@ export function register(api: Api) {
         id: st.id, displayName: st.display_name, photoMediaId: st.photo_media_id,
         serviceIds: st.restricted ? st.service_ids : allIds,
       })),
+    } };
     });
+    sendCached(req, res, body, { maxAge: 60, swr: 120 });
   });
 
   const reviewsQuery = pageQuery;
-  api.get('/discover/salons/:salonId/reviews', { summary: 'Public reviews of a salon', tag: 'Discover', auth: 'none', query: reviewsQuery, returns: 'Review[]' }, async (req, res) => {
+  api.get('/discover/salons/:salonId/reviews', { summary: 'Public reviews of a salon', tag: 'Discover', auth: 'none', query: reviewsQuery, returns: 'PublicReview[]' }, async (req, res) => {
     const salonId = parse(uuid, req.params['salonId']);
     const q = parse(reviewsQuery, req.query);
     const ks = keysetFrom(q.cursor);
@@ -139,10 +160,10 @@ export function register(api: Api) {
       params,
     );
     const { items, nextCursor } = pageOf(r.rows as { id: string; _ck: string }[], q.limit);
-    send(res, items.map((x: any) => ({ id: x.id, rating: x.rating, comment: x.comment, customerName: x.first_name, replyText: x.reply_text, replyAt: x.reply_at, createdAt: x.created_at })), { limit: q.limit, nextCursor });
+    sendCached(req, res, { data: items.map((x: any) => ({ id: x.id, rating: x.rating, comment: x.comment, customerName: x.first_name, replyText: x.reply_text, replyAt: x.reply_at, createdAt: x.created_at })), meta: { limit: q.limit, nextCursor } }, { maxAge: 30, swr: 60 });
   });
 
-  api.get('/salons/:salonId/availability', { summary: 'Bookable slots for services on a date', tag: 'Discover', auth: 'none', query: availabilityQuery, returns: 'Availability', note: 'Slots are on a 15-minute grid in the salon timezone; duration = Σ(duration×staff speed rounded up to 5 min)+buffers' }, async (req, res) => {
+  api.get('/salons/:salonId/availability', { summary: 'Bookable slots for services on a date', tag: 'Discover', auth: 'none', query: availabilityQuery, returns: 'Availability', note: 'Slots are on a 15-minute grid in the salon timezone; duration = sum(duration x staff speed rounded up to 5 min) + buffers. Advisory: the hold decides. Do not poll faster than every 10 s.' }, async (req, res) => {
     const salonId = parse(uuid, req.params['salonId']);
     const q = parse(availabilityQuery, req.query);
     if (!isValidDateString(q.date)) throw E.validation('Invalid date', [{ field: 'date', issue: 'not a calendar date' }]);
@@ -153,56 +174,13 @@ export function register(api: Api) {
     if (q.date < today) throw E.validation('date is in the past', [{ field: 'date', issue: 'in the past' }]);
     if (q.date > addDays(today, MAX_DAYS_AHEAD)) throw E.validation(`date is more than ${MAX_DAYS_AHEAD} days ahead`, [{ field: 'date', issue: 'too far ahead' }]);
 
-    await sweepExpiredHolds(deps.pool);
-
-    let staffRows: { id: string }[];
-    if (q.staffId) {
-      staffRows = [{ id: q.staffId }];
-    } else {
-      staffRows = (await deps.pool.query<{ id: string }>('SELECT id FROM salon_staff WHERE salon_id = $1 AND is_active AND is_bookable ORDER BY created_at', [salonId])).rows;
-    }
-    const day = localDayRange(q.date, tz);
-    const wd = weekdayOf(q.date);
-    const [hours, closure] = await Promise.all([
-      deps.pool.query<{ opens: string; closes: string; is_closed: boolean }>('SELECT opens, closes, is_closed FROM salon_hours WHERE salon_id = $1 AND weekday = $2', [salonId, wd]),
-      deps.pool.query('SELECT 1 FROM salon_closures WHERE salon_id = $1 AND date = $2::date', [salonId, q.date]),
-    ]);
-    const ids = staffRows.map((s) => s.id);
-    const [sh, off, busy] = await Promise.all([
-      deps.pool.query<{ staff_id: string; start_time: string; end_time: string }>('SELECT staff_id, start_time, end_time FROM staff_hours WHERE staff_id = ANY($1::uuid[]) AND weekday = $2', [ids, wd]),
-      deps.pool.query<{ staff_id: string; s: Date; e: Date }>("SELECT staff_id, lower(during) AS s, upper(during) AS e FROM staff_time_off WHERE staff_id = ANY($1::uuid[]) AND during && tstzrange($2, $3, '[)')", [ids, new Date(day.start), new Date(day.end)]),
-      deps.pool.query<{ staff_id: string; s: Date; e: Date }>(
-        "SELECT staff_id, starts_at AS s, ends_at AS e FROM bookings WHERE staff_id = ANY($1::uuid[]) AND status IN ('held','confirmed','checked_in') AND during && tstzrange($2, $3, '[)')",
-        [ids, new Date(day.start), new Date(day.end)],
-      ),
-    ]);
-    const hr = hours.rows[0];
-    const closed = (closure.rowCount ?? 0) > 0;
-    const out: { staffId: string; startsAt: string; endsAt: string }[] = [];
-    for (const st of staffRows) {
-      let plan;
-      try {
-        plan = await planBooking(deps.pool, salonId, st.id, q.serviceIds);
-      } catch (err) {
-        if (q.staffId) throw err; // explicit staff: surface why
-        continue; // staff cannot do these services
-      }
-      const own = sh.rows.find((x) => x.staff_id === st.id);
-      const windows = workingWindows({
-        date: q.date, tz,
-        salonHours: hr ? { opens: hr.opens, closes: hr.closes, isClosed: hr.is_closed } : null,
-        closed,
-        staffHours: own ? { start: own.start_time, end: own.end_time } : null,
-      });
-      const blocked: Interval[] = [
-        ...off.rows.filter((x) => x.staff_id === st.id).map((x) => ({ start: x.s.getTime(), end: x.e.getTime() })),
-        ...busy.rows.filter((x) => x.staff_id === st.id).map((x) => ({ start: x.s.getTime(), end: x.e.getTime() })),
-      ];
-      for (const sl of computeSlots({ windows, blocked, durationMin: plan.totalDurationMin, now: Date.now() })) {
-        out.push({ staffId: st.id, startsAt: new Date(sl.start).toISOString(), endsAt: new Date(sl.end).toISOString() });
-      }
-    }
-    out.sort((a, b) => a.startsAt.localeCompare(b.startsAt) || a.staffId.localeCompare(b.staffId));
-    send(res, { date: q.date, timezone: tz, slots: out });
-  });
+    const sv = await deps.cache.version(`salon:${salonId}`);
+    const key = `avail:${salonId}:v${sv}:${q.date}:${[...q.serviceIds].sort().join(',')}:${q.staffId ?? '-'}`;
+    const data = await deps.cache.getOrLoad(key, deps.config.cacheTtl.availability, async () => {
+      await sweepExpiredHolds(deps.pool);
+      const slots = await computeAvailability(deps.pool, { id: salonId, timezone: tz }, q.serviceIds, q.staffId, q.date);
+      return { date: q.date, timezone: tz, slots };
+    });
+    send(res, data);
+  }, [userLimiter('availability', deps.config.rateLimit.availabilityPerMin)]);
 }

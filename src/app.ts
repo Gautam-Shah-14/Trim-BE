@@ -7,7 +7,14 @@ import type { Logger } from 'pino';
 import type pg from 'pg';
 import type { Config } from './config.js';
 import { AppError } from './errors.js';
-import { Api } from './http/api.js';
+import { Api, setPlanTtl } from './http/api.js';
+import { CacheService, type Cache } from './infra/cache.js';
+import { buildDrivers } from './infra/index.js';
+import type { RateLimiter } from './infra/limiter.js';
+import { Metrics } from './infra/metrics.js';
+import type { JobQueue } from './infra/queue.js';
+import { loadShedder } from './infra/resilience.js';
+import { registerJobs } from './jobs/index.js';
 import { generalLimiter } from './http/rateLimit.js';
 import type { Deps } from './http/types.js';
 import { createRazorpayGateway, type PaymentGateway } from './lib/gateway.js';
@@ -37,20 +44,47 @@ export interface CreateAppOptions {
   pool: pg.Pool;
   log: Logger;
   gateway?: PaymentGateway;
+  /** override drivers (tests); default: built from env */
+  cache?: Cache;
+  limiter?: RateLimiter;
+  queue?: JobQueue;
+  captureException?: (err: unknown, ctx?: Record<string, unknown>) => void;
 }
 
 export const MODULES = [pub, auth, me, media, discover, salon, services, staff, roles, bookings, billing, reviews, analytics, subscription, webhooks, admin, sales];
 
 /** Build the Express app. Used by server.ts, by tests (with a fake gateway) and by the OpenAPI generator. */
-export function createApp(opts: CreateAppOptions): { app: Express; api: Api; deps: Deps } {
+export function createApp(opts: CreateAppOptions): { app: Express; api: Api; deps: Deps; close: () => Promise<void> } {
   const { config, pool, log } = opts;
+  const built = opts.cache && opts.limiter && opts.queue ? null : buildDrivers(config, log);
+  const metrics = new Metrics();
+  const driverCache = opts.cache ?? built!.cache;
   const deps: Deps = {
+    cache: new CacheService(driverCache, metrics),
+    limiter: opts.limiter ?? built!.limiter,
+    queue: opts.queue ?? built!.queue,
+    metrics,
+    captureException: opts.captureException ?? (() => {}),
     config,
     pool,
     log,
     hasher: makePasswordHasher(config.argon2MemoryKib),
     gateway: opts.gateway ?? createRazorpayGateway(config.razorpay),
   };
+
+  setPlanTtl(config.cacheTtl.plans);
+  registerJobs(deps);
+  metrics.gauge('db_pool_total', () => pool.totalCount);
+  metrics.gauge('db_pool_waiting', () => pool.waitingCount);
+  metrics.gauge('process_uptime_seconds', () => Math.round(process.uptime()));
+  metrics.gauge('queue_depth', () => deps.queue.depth());
+
+  const shed = loadShedder({
+    cfg: { lagMs: config.loadShed.lagMs, poolWaiting: config.loadShed.poolWaiting, queueMaxDepth: config.queue.maxDepth },
+    poolWaiting: () => pool.waitingCount,
+    queueDepth: () => 0,
+    onShed: () => metrics.inc('load_shed_total'),
+  });
 
   const app = express();
   app.disable('x-powered-by');
@@ -62,6 +96,21 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
     req.id = incoming && /^[\w.-]{8,100}$/.test(incoming) ? incoming : randomUUID();
     res.setHeader('X-Request-Id', req.id);
     req.deps = deps;
+    next();
+  });
+  app.use((req, res, next) => {
+    const t0 = process.hrtime.bigint();
+    const timer = setTimeout(() => {
+      if (!res.headersSent) res.status(504).json({ error: { code: 'TIMEOUT', message: 'The request took too long' } });
+    }, config.requestTimeoutMs);
+    timer.unref();
+    res.on('close', () => {
+      clearTimeout(timer);
+      const route = (req.route?.path as string | undefined) ? `${req.baseUrl}${req.route.path}` : 'unmatched';
+      const secs = Number(process.hrtime.bigint() - t0) / 1e9;
+      metrics.inc('http_requests_total', { method: req.method, route, status: res.statusCode });
+      metrics.observe('http_request_duration_seconds', secs, { route });
+    });
     next();
   });
   app.use(
@@ -88,7 +137,9 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
 
   // Razorpay needs the exact raw bytes for signature verification: this must precede express.json()
   app.use('/v1/webhooks/razorpay', express.raw({ type: '*/*', limit: '1mb' }));
-  app.use(express.json({ limit: '400kb' }));
+  app.use('/v1/media', express.json({ limit: `${config.mediaBodyLimitKb}kb` }));
+  app.use(express.json({ limit: `${config.bodyLimitKb}kb` }));
+  app.use(shed.mw);
 
   app.get('/health', async (_req, res) => {
     let db = 'up';
@@ -100,20 +151,54 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
     res.status(db === 'up' ? 200 : 503).json({ status: db === 'up' ? 'ok' : 'degraded', db, version: VERSION, uptimeSec: Math.round(process.uptime()), time: new Date().toISOString() });
   });
 
+  app.get('/ready', async (_req, res) => {
+    const probe = async (f: () => Promise<unknown>) => {
+      try {
+        await Promise.race([f(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))]);
+        return 'up';
+      } catch {
+        return 'down';
+      }
+    };
+    const db = await probe(() => pool.query('SELECT 1'));
+    const queue = deps.queue.driver === 'pgboss' ? ((await probe(async () => { if (!(await deps.queue.ping())) throw new Error('down'); })) as string) : 'up';
+    const cache = await probe(async () => { if (!(await driverCache.ping())) throw new Error('down'); });
+    // cache and queue degrade gracefully, only the database makes the instance unready
+    res.status(db === 'up' ? 200 : 503).json({ status: db === 'up' ? 'ready' : 'not_ready', db, queue, cache, queueDriver: deps.queue.driver, cacheDriver: driverCache.driver });
+  });
+
+  if (config.metrics.enabled) {
+    app.get('/metrics', async (req, res) => {
+      if (config.metrics.token && req.header('authorization') !== `Bearer ${config.metrics.token}`) {
+        res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Metrics token required' } });
+        return;
+      }
+      res.type('text/plain; version=0.0.4').send(await metrics.render());
+    });
+  }
+
   const v1 = Router();
-  v1.use(generalLimiter(config.rateLimit.generalPerMin));
+  const general = generalLimiter(config.rateLimit.generalPerMin);
+  v1.use((req, res, next) => (req.path.startsWith('/webhooks/') ? next() : general(req, res, next))); // webhook: signature-verified, not rate limited
   const api = new Api(v1, deps);
   for (const m of MODULES) m.register(api);
   app.use('/v1', v1);
 
   app.use((_req, _res, next) => next(new AppError('NOT_FOUND', 'Route not found')));
-  app.use(errorHandler(log));
-  return { app, api, deps };
+  app.use(errorHandler(log, () => deps));
+  const close = async () => {
+    shed.stop();
+    await deps.queue.stop().catch(() => {});
+    await driverCache.close().catch(() => {});
+    await deps.limiter.close().catch(() => {});
+  };
+  return { app, api, deps, close };
 }
 
-const errorHandler = (log: Logger): ErrorRequestHandler => (err, req, res, _next) => {
+const errorHandler = (log: Logger, deps: () => Deps): ErrorRequestHandler => (err, req, res, _next) => {
   if (res.headersSent) return;
   if (err instanceof AppError) {
+    if (err.code === 'SLOT_TAKEN') deps().metrics.inc('slot_taken_total');
     const body: Record<string, unknown> = { code: err.code, message: err.message };
     if (err.details !== undefined) body['details'] = err.details;
     if (err.reason) body['reason'] = err.reason;
@@ -134,5 +219,6 @@ const errorHandler = (log: Logger): ErrorRequestHandler => (err, req, res, _next
     return;
   }
   log.error({ err, reqId: req.id }, 'unhandled error');
+  deps().captureException(err, { reqId: req.id, path: req.path });
   res.status(500).json({ error: { code: 'INTERNAL', message: 'Something went wrong. Quote request id ' + req.id } });
 };

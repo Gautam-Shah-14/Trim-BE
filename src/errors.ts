@@ -12,6 +12,8 @@ export type ErrorCode =
   | 'PLAN_LIMIT'
   | 'SUBSCRIPTION_INACTIVE'
   | 'RATE_LIMITED'
+  | 'OVERLOADED'
+  | 'TIMEOUT'
   | 'INTERNAL';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -28,6 +30,8 @@ const STATUS: Record<ErrorCode, number> = {
   PLAN_LIMIT: 403,
   SUBSCRIPTION_INACTIVE: 403,
   RATE_LIMITED: 429,
+  OVERLOADED: 503,
+  TIMEOUT: 504,
   INTERNAL: 500,
 };
 

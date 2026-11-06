@@ -43,6 +43,8 @@ export function register(api: Api) {
       compUntil: sub.comp_until,
       cancelAtPeriodEnd: sub.cancel_at_period_end,
       razorpaySubscriptionId: sub.razorpay_subscription_id,
+      paymentMethodAuthorized: !!sub.payment_authorized_at && ['trialing', 'active', 'past_due'].includes(sub.status),
+      nextChargeAt: sub.next_charge_at,
       entitlements: entDto(ent),
       limits: ent.limits,
       usage: { activeStaff: usage.rows[0]!.staff, customRoles: usage.rows[0]!.roles },
@@ -80,7 +82,7 @@ export function register(api: Api) {
         deps.log.error({ err }, 'razorpay createSubscription failed');
         throw new AppError('INTERNAL', 'The payment provider could not create the subscription, please try again');
       }
-      await deps.pool.query('UPDATE subscriptions SET razorpay_subscription_id = $2, plan_code = $3, interval = $4, updated_at = now() WHERE salon_id = $1', [ctx.salonId, sub.id, b.planCode, b.interval]);
+      await deps.pool.query('UPDATE subscriptions SET razorpay_subscription_id = $2, plan_code = $3, interval = $4, payment_authorized_at = NULL, next_charge_at = NULL, updated_at = now() WHERE salon_id = $1', [ctx.salonId, sub.id, b.planCode, b.interval]);
       await auditReq(req, { action: 'subscription.checkout', entity: 'subscription', entityId: sub.id, meta: { planCode: b.planCode, interval: b.interval } });
       return { status: 200, body: { data: { razorpaySubscriptionId: sub.id, keyId: deps.gateway.keyId } } };
     });

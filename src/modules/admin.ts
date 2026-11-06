@@ -1,4 +1,4 @@
-import { Api, invalidatePlanCache, send } from '../http/api.js';
+import { Api, bumpPlans, bumpSalon, bumpUser, send } from '../http/api.js';
 import { parse, z, str, optStr, uuid, email, phoneE164, password, isoInstant, pageQuery, keysetFrom, pageOf, decodeCursor, encodeCursor } from '../http/validate.js';
 import { E } from '../errors.js';
 import { isPgError, withTx } from '../db.js';
@@ -69,7 +69,7 @@ export function register(api: Api) {
     send(res, items.map((s: any) => ({ ...salonDto(s), subscription: { status: s.sub_status, planCode: s.plan_code, trialEndsAt: s.trial_ends_at, compUntil: s.comp_until }, owner: { name: s.owner_name, email: s.owner_email, phone: s.owner_phone } })), { limit: q.limit, nextCursor });
   });
 
-  api.get('/admin/salons/:id', { summary: 'Salon detail for review', tag: 'Admin', auth: 'admin', returns: 'AdminSalon' }, async (req, res) => {
+  api.get('/admin/salons/:id', { summary: 'Salon detail for review', tag: 'Admin', auth: 'admin', returns: 'AdminSalonDetail' }, async (req, res) => {
     const id = parse(uuid, req.params['id']);
     const s = await deps.pool.query('SELECT * FROM salons WHERE id = $1', [id]);
     if (!s.rows[0]) throw E.notFound('Salon');
@@ -98,11 +98,12 @@ export function register(api: Api) {
       [id, b.status, req.auth!.userId],
     );
     if (!r.rows[0]) throw E.notFound('Salon');
+    bumpSalon(res, id);
     await auditReq(req, { action: `salon.${b.status}`, entity: 'salon', entityId: id, salonId: id });
     send(res, salonDto(r.rows[0]));
   });
 
-  api.get('/admin/plans', { summary: 'All plans including inactive', tag: 'Admin', auth: 'admin', returns: 'Plan[]' }, async (_req, res) => {
+  api.get('/admin/plans', { summary: 'All plans including inactive', tag: 'Admin', auth: 'admin', returns: 'AdminPlan[]' }, async (_req, res) => {
     const r = await deps.pool.query('SELECT * FROM plans ORDER BY price_monthly_paise');
     send(res, r.rows.map((p) => ({ ...planDto(p), isActive: p.is_active, razorpayPlanIdMonthly: p.razorpay_plan_id_monthly, razorpayPlanIdAnnual: p.razorpay_plan_id_annual })));
   });
@@ -126,16 +127,18 @@ export function register(api: Api) {
     if (b.priceAnnualPaise !== undefined) sets.push('razorpay_plan_id_annual = NULL');
     if (!sets.length) throw E.validation('Nothing to update', [{ field: '', issue: 'no fields supplied' }]);
     const r = await deps.pool.query(`UPDATE plans SET ${sets.join(', ')}, updated_at = now() WHERE code = $1 RETURNING *`, vals);
-    invalidatePlanCache(deps.pool);
+    await deps.cache.del('plans');
+    bumpPlans(res);
     await auditReq(req, { action: 'plan.updated', entity: 'plan', entityId: code, meta: b });
     send(res, planDto(r.rows[0]));
   });
 
-  api.post('/admin/salons/:id/comp', { summary: 'Grant/extend complimentary access until a date (null clears)', tag: 'Admin', auth: 'admin', body: compSchema, returns: 'AdminSalon' }, async (req, res) => {
+  api.post('/admin/salons/:id/comp', { summary: 'Grant/extend complimentary access until a date (null clears)', tag: 'Admin', auth: 'admin', body: compSchema, returns: 'CompResult' }, async (req, res) => {
     const b = parse(compSchema, req.body);
     const id = parse(uuid, req.params['id']);
     const r = await deps.pool.query('UPDATE subscriptions SET comp_until = $2, updated_at = now() WHERE salon_id = $1 RETURNING comp_until, trial_ends_at, status, plan_code', [id, b.until]);
     if (!r.rows[0]) throw E.notFound('Salon');
+    bumpSalon(res, id);
     await auditReq(req, { action: 'subscription.comp', entity: 'salon', entityId: id, salonId: id, meta: { until: b.until } });
     send(res, { salonId: id, compUntil: r.rows[0].comp_until, trialEndsAt: r.rows[0].trial_ends_at, status: r.rows[0].status, planCode: r.rows[0].plan_code });
   });
@@ -203,6 +206,7 @@ export function register(api: Api) {
       if (!b.isActive) await c.query('UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [id]);
       return r.rows[0];
     });
+    bumpUser(res, id);
     await auditReq(req, { action: b.isActive ? 'user.activated' : 'user.deactivated', entity: 'user', entityId: id });
     send(res, { id: u.id, fullName: u.full_name, email: u.email, phone: u.phone_e164, role: u.platform_role, isActive: u.is_active, createdAt: u.created_at });
   });
@@ -250,6 +254,8 @@ export function register(api: Api) {
       if (!r.rows[0]) throw E.notFound('Review');
       await recomputeRating(c, r.rows[0].salon_id);
     });
+    const rv = await deps.pool.query<{ salon_id: string }>('SELECT salon_id FROM reviews WHERE id = $1', [id]);
+    bumpSalon(res, rv.rows[0]?.salon_id);
     await auditReq(req, { action: `review.${b.status}`, entity: 'review', entityId: id });
     send(res, { ok: true });
   });
@@ -268,6 +274,7 @@ export function register(api: Api) {
         if (b.serviceTemplateIds?.length) await c.query('INSERT INTO hairstyle_service_map (hairstyle_id, template_id) SELECT $1, unnest($2::uuid[])', [r.rows[0]!.id, [...new Set(b.serviceTemplateIds)]]);
         return r.rows[0]!.id;
       });
+      await deps.cache.bump('catalog');
       send(res, hairstyleDto((await deps.pool.query(HAIR_SQL, [id])).rows[0]), undefined, 201);
     } catch (err) {
       if (isPgError(err, '23505')) throw E.conflict('A hairstyle with that name exists', 'NAME_TAKEN');
@@ -303,13 +310,20 @@ export function register(api: Api) {
       if (isPgError(err, '23505')) throw E.conflict('A hairstyle with that name exists', 'NAME_TAKEN');
       throw err;
     });
+    await deps.cache.bump('catalog');
     send(res, hairstyleDto((await deps.pool.query(HAIR_SQL, [id])).rows[0]));
   });
 
   api.delete('/admin/hairstyles/:id', { summary: 'Remove a hairstyle', tag: 'Admin', auth: 'admin' }, async (req, res) => {
     const r = await deps.pool.query('DELETE FROM hairstyle_catalog WHERE id = $1', [parse(uuid, req.params['id'])]);
     if (!r.rowCount) throw E.notFound('Hairstyle');
+    await deps.cache.bump('catalog');
     send(res, { ok: true });
+  });
+
+  api.get('/admin/queue', { summary: 'Background queue health (driver, depth, failed jobs, unprocessed webhook events)', tag: 'Admin', auth: 'admin', returns: 'QueueHealth' }, async (_req, res) => {
+    const pending = await deps.pool.query<{ n: number }>('SELECT count(*)::int AS n FROM subscription_events WHERE processed_at IS NULL');
+    send(res, { driver: deps.queue.driver, depth: await deps.queue.depth(), maxDepth: deps.config.queue.maxDepth, workerMode: deps.config.workerMode, jobs: await deps.queue.stats(), unprocessedWebhookEvents: pending.rows[0]!.n });
   });
 }
 

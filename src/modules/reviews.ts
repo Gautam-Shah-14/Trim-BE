@@ -23,7 +23,7 @@ export const reviewDto = (r: Record<string, any>) => ({
 export function register(api: Api) {
   const { deps } = api;
 
-  api.get('/salons/:salonId/reviews', { summary: 'Reviews of this salon (any member)', tag: 'Reviews', auth: 'salon', query: pageQuery, returns: 'Review[]' }, async (req, res) => {
+  api.get('/salons/:salonId/reviews', { summary: 'Reviews of this salon (any member)', tag: 'Reviews', auth: 'salon', query: pageQuery, returns: 'SalonReview[]' }, async (req, res) => {
     const q = parse(pageQuery, req.query);
     const ks = keysetFrom(q.cursor);
     const params: unknown[] = [req.salonCtx!.salonId, q.limit + 1];
@@ -39,11 +39,12 @@ export function register(api: Api) {
     send(res, items.map(reviewDto), { limit: q.limit, nextCursor });
   });
 
-  api.post('/salons/:salonId/reviews/:reviewId/reply', { summary: 'Reply to a review (replaces an earlier reply)', tag: 'Reviews', auth: 'salon', perm: 'reviews.reply', body: replySchema, returns: 'Review' }, async (req, res) => {
+  api.post('/salons/:salonId/reviews/:reviewId/reply', { summary: 'Reply to a review (replaces an earlier reply)', tag: 'Reviews', auth: 'salon', perm: 'reviews.reply', body: replySchema, returns: 'SalonReview' }, async (req, res) => {
     const b = parse(replySchema, req.body);
     const id = parse(uuid, req.params['reviewId']);
     const r = await deps.pool.query(
-      'UPDATE reviews SET reply_text = $3, reply_by = $4, reply_at = now() WHERE id = $1 AND salon_id = $2 RETURNING *',
+      `WITH u AS (UPDATE reviews SET reply_text = $3, reply_by = $4, reply_at = now() WHERE id = $1 AND salon_id = $2 RETURNING *)
+       SELECT u.*, COALESCE(split_part(c.full_name, ' ', 1), 'Customer') AS customer_name FROM u LEFT JOIN users c ON c.id = u.customer_id`,
       [id, req.salonCtx!.salonId, b.replyText, req.auth!.userId],
     );
     if (!r.rows[0]) throw E.notFound('Review');

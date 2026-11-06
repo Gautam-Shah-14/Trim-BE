@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import type pg from 'pg';
-import { Api, send } from '../http/api.js';
+import { Api, bumpSalon, send } from '../http/api.js';
+import { salonLimiter, userLimiter } from '../http/rateLimit.js';
+import { findAlternatives } from '../lib/availability.js';
 import { withIdempotency } from '../http/idempotency.js';
 import { parse, z, str, uuid, idList, isoInstant, dateStr, pageQuery, phoneE164, encodeCursor, decodeCursor } from '../http/validate.js';
 import { AppError, E } from '../errors.js';
@@ -52,6 +54,34 @@ async function fetchBooking(db: pg.Pool | pg.PoolClient, id: string) {
   return r.rows[0] as Record<string, any> | undefined;
 }
 
+const RETRYABLE = (err: unknown) => isPgError(err, '40P01') || isPgError(err, '40001') || isPgError(err, '55P03');
+
+/**
+ * Queue contenders for one staff member/day behind a cheap transaction-scoped advisory lock. This is only an optimisation:
+ * without it, concurrent inserts into the exclusion constraint can deadlock and stall for deadlock_timeout (1 s).
+ * The constraint stays the sole authority.
+ */
+async function lockStaffDay(c: pg.PoolClient, staffId: string, startMs: number) {
+  await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`slot:${staffId}:${new Date(startMs).toISOString().slice(0, 10)}`]);
+}
+const jitter = (ms: number) => new Promise((r) => setTimeout(r, ms + Math.random() * ms));
+
+/** Retry a whole transaction on deadlock/serialization failures (spec 11.5.3), at most 2 retries, then report the slot as taken. */
+async function retryTx<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!RETRYABLE(err)) throw err;
+      if (attempt >= 2) {
+        if (isPgError(err, '55P03')) throw new AppError('OVERLOADED', 'The service is busy, please retry shortly');
+        throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
+      }
+      await jitter(15 * (attempt + 1));
+    }
+  }
+}
+
 export function register(api: Api) {
   const { deps } = api;
   const qrSecret = deps.config.qrSecret;
@@ -61,38 +91,83 @@ export function register(api: Api) {
   };
 
   // ------------------------------------------------------------ customer side
-  api.post('/bookings/hold', { summary: 'Hold a slot for 5 minutes', tag: 'Bookings', auth: 'customer', body: holdSchema, returns: 'Booking', status: 201, idempotent: true, note: '409 SLOT_TAKEN when the staff member is already booked/held' }, async (req, res) => {
+  /** SLOT_TAKEN gets details.alternatives (next <= 3 free starts for the same staff and services) so apps can offer one-tap re-booking */
+  async function withAlternatives<T>(salonId: string, staffId: string, serviceIds: string[], startMs: number, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof AppError && err.code === 'SLOT_TAKEN' && !err.details) {
+        const tz = (await deps.pool.query<{ timezone: string }>('SELECT timezone FROM salons WHERE id = $1', [salonId])).rows[0]?.timezone ?? 'Asia/Kolkata';
+        const alternatives = await findAlternatives(deps.pool, { id: salonId, timezone: tz }, staffId, serviceIds, startMs);
+        throw new AppError('SLOT_TAKEN', err.message, { alternatives });
+      }
+      throw err;
+    }
+  }
+
+  api.post('/bookings/hold', { summary: 'Hold a slot for 5 minutes', tag: 'Bookings', auth: 'customer', body: holdSchema, returns: 'Booking', status: 201, idempotent: true, note: '409 SLOT_TAKEN when the staff member is already booked/held (details.alternatives lists the next free starts). Caps: max 3 active holds, 10 upcoming confirmed bookings, 5 bookings created per 24 h per customer (409 CONFLICT, reason HOLD_LIMIT / UPCOMING_LIMIT / DAILY_LIMIT). Rate limited per user.', limit: [userLimiter('hold', deps.config.rateLimit.holdPerMin)] }, async (req, res) => {
     const b = parse(holdSchema, req.body);
     const userId = req.auth!.userId;
+    bumpSalon(res, b.salonId);
     const out = await withIdempotency(req, 'bookings.hold', userId, b, async () => {
       checkStart(b.startsAt.getTime(), { allowPastMin: 0 });
       const key = req.header('idempotency-key') ?? null;
-      const id = await withTx(deps.pool, async (c) => {
-        const salon = await loadSalonEnt(c, b.salonId);
-        if (!salon || salon.status !== 'approved' || !salon.ent.discoverable) throw E.notFound('Salon');
-        if (salon.ent.readOnly) throw E.inactive('This salon is not accepting bookings right now');
-        await sweepExpiredHolds(c, b.staffId);
-        const plan = await planBooking(c, b.salonId, b.staffId, b.serviceIds);
-        const startMs = b.startsAt.getTime();
-        const endMs = startMs + plan.totalDurationMin * 60_000;
-        await assertWithinWorkingTime(c, b.salonId, salon.timezone, b.staffId, startMs, endMs);
-        const u = await c.query<{ full_name: string; phone_e164: string | null }>('SELECT full_name, phone_e164 FROM users WHERE id = $1', [userId]);
-        try {
-          const ins = await c.query<{ id: string }>(
-            `INSERT INTO bookings (salon_id, customer_id, customer_name, customer_phone, staff_id, source, status, starts_at, ends_at,
-                                   total_duration_min, total_price_paise, hold_expires_at, idempotency_key)
-             VALUES ($1,$2,$3,$4,$5,'app','held',$6,$7,$8,$9, now() + make_interval(mins => $10), $11) RETURNING id`,
-            [b.salonId, userId, u.rows[0]!.full_name, u.rows[0]!.phone_e164, b.staffId, new Date(startMs), new Date(endMs), plan.totalDurationMin, plan.totalPricePaise, HOLD_MINUTES, key],
+      const fastKey = `hold:${b.staffId}:${b.startsAt.getTime()}`;
+      let proceed = true;
+      // optional Redis fast-fail (11.5.4): rejects obvious duplicates before the DB; never trusted for correctness
+      if (deps.cache.driver.driver === 'redis') proceed = await deps.cache.driver.setNx(fastKey, 5000).catch(() => true);
+      let ok = false;
+      try {
+        const id = await withAlternatives(b.salonId, b.staffId, b.serviceIds, b.startsAt.getTime(), async () => {
+          if (!proceed) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
+          return retryTx(() =>
+            withTx(deps.pool, async (c) => {
+              const salon = await loadSalonEnt(c, b.salonId);
+              if (!salon || salon.status !== 'approved' || !salon.ent.discoverable) throw E.notFound('Salon');
+              if (salon.ent.readOnly) throw E.inactive('This salon is not accepting bookings right now');
+              // serialise this customer's holds so the hoarding caps are exact under parallel requests
+              await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`cust:${userId}`]);
+              const caps = deps.config.caps;
+              const cnt = await c.query<{ held: number; upcoming: number; today: number }>(
+                `SELECT count(*) FILTER (WHERE status = 'held' AND hold_expires_at > now())::int AS held,
+                        count(*) FILTER (WHERE status = 'confirmed' AND starts_at > now())::int AS upcoming,
+                        count(*) FILTER (WHERE created_at > now() - interval '24 hours' AND status <> 'expired')::int AS today
+                   FROM bookings WHERE customer_id = $1`,
+                [userId],
+              );
+              const n = cnt.rows[0]!;
+              if (n.held >= caps.maxHeld) throw new AppError('CONFLICT', `You can hold at most ${caps.maxHeld} slots at a time; confirm or cancel one first`, { limit: caps.maxHeld, current: n.held }, 'HOLD_LIMIT');
+              if (n.upcoming >= caps.maxUpcoming) throw new AppError('CONFLICT', `You can have at most ${caps.maxUpcoming} upcoming bookings`, { limit: caps.maxUpcoming, current: n.upcoming }, 'UPCOMING_LIMIT');
+              if (n.today >= caps.maxPerDay) throw new AppError('CONFLICT', `You can create at most ${caps.maxPerDay} bookings per day`, { limit: caps.maxPerDay, current: n.today }, 'DAILY_LIMIT');
+              await lockStaffDay(c, b.staffId, b.startsAt.getTime());
+              await sweepExpiredHolds(c, b.staffId);
+              const plan = await planBooking(c, b.salonId, b.staffId, b.serviceIds);
+              const startMs = b.startsAt.getTime();
+              const endMs = startMs + plan.totalDurationMin * 60_000;
+              await assertWithinWorkingTime(c, b.salonId, salon.timezone, b.staffId, startMs, endMs);
+              const u = await c.query<{ full_name: string; phone_e164: string | null }>('SELECT full_name, phone_e164 FROM users WHERE id = $1', [userId]);
+              try {
+                const ins = await c.query<{ id: string }>(
+                  `INSERT INTO bookings (salon_id, customer_id, customer_name, customer_phone, staff_id, source, status, starts_at, ends_at,
+                                         total_duration_min, total_price_paise, hold_expires_at, idempotency_key)
+                   VALUES ($1,$2,$3,$4,$5,'app','held',$6,$7,$8,$9, now() + make_interval(mins => $10), $11) RETURNING id`,
+                  [b.salonId, userId, u.rows[0]!.full_name, u.rows[0]!.phone_e164, b.staffId, new Date(startMs), new Date(endMs), plan.totalDurationMin, plan.totalPricePaise, HOLD_MINUTES, key],
+                );
+                await insertItems(c, ins.rows[0]!.id, plan.items);
+                return ins.rows[0]!.id;
+              } catch (err) {
+                if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
+                throw err;
+              }
+            }),
           );
-          await insertItems(c, ins.rows[0]!.id, plan.items);
-          return ins.rows[0]!.id;
-        } catch (err) {
-          if ((isPgError(err, '23P01') || isPgError(err, '40P01'))) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
-          throw err;
-        }
-      });
-      const row = (await fetchBooking(deps.pool, id))!;
-      return { status: 201, body: { data: bookingDto(row, qrSecret, false) } };
+        });
+        ok = true;
+        const row = (await fetchBooking(deps.pool, id))!;
+        return { status: 201, body: { data: bookingDto(row, qrSecret, false) } };
+      } finally {
+        if (!ok && deps.cache.driver.driver === 'redis' && proceed) await deps.cache.driver.del(fastKey).catch(() => {});
+      }
     });
     reply(res, out);
   });
@@ -119,7 +194,9 @@ export function register(api: Api) {
         }
         throw E.conflict(`Booking is ${row.status} and cannot be confirmed`, 'INVALID_STATE');
       }
-      return { status: 200, body: { data: bookingDto((await fetchBooking(deps.pool, id))!, qrSecret, true) } };
+      const fresh = (await fetchBooking(deps.pool, id))!;
+      bumpSalon(res, fresh.salon_id);
+      return { status: 200, body: { data: bookingDto(fresh, qrSecret, true) } };
     });
     reply(res, out);
   });
@@ -140,7 +217,9 @@ export function register(api: Api) {
         throw new AppError('CONFLICT', `Bookings can only be cancelled at least ${r.cutoff} minutes before the start`, { cutoffMin: r.cutoff }, 'CANCEL_CUTOFF');
       }
       await c.query("UPDATE bookings SET status = 'cancelled', cancelled_reason = $2, qr_nonce = NULL, version = version + 1, updated_at = now() WHERE id = $1", [id, b.reason ?? 'cancelled by customer']);
-      return fetchBooking(c, id);
+      const fresh = await fetchBooking(c, id);
+      bumpSalon(res, fresh?.salon_id);
+      return fresh;
     });
     send(res, bookingDto(row!, qrSecret, false));
   });
@@ -174,7 +253,7 @@ export function register(api: Api) {
     send(res, bookingDto(row, qrSecret, true));
   });
 
-  api.post('/bookings/:id/review', { summary: 'Review a completed booking', tag: 'Reviews', auth: 'customer', body: reviewSchema, returns: 'Review', status: 201 }, async (req, res) => {
+  api.post('/bookings/:id/review', { summary: 'Review a completed booking', tag: 'Reviews', auth: 'customer', body: reviewSchema, returns: 'NewReview', status: 201 }, async (req, res) => {
     const id = parse(uuid, req.params['id']);
     const b = parse(reviewSchema, req.body);
     const review = await withTx(deps.pool, async (c) => {
@@ -188,6 +267,7 @@ export function register(api: Api) {
           [id, r.salon_id, req.auth!.userId, b.rating, b.comment ?? null],
         );
         await recomputeRating(c, r.salon_id);
+        bumpSalon(res, r.salon_id);
         return ins.rows[0];
       } catch (err) {
         if (isPgError(err, '23505')) throw E.conflict('This booking already has a review', 'REVIEW_EXISTS');
@@ -236,7 +316,8 @@ export function register(api: Api) {
     const b = parse(walkInSchema, req.body);
     const out = await withIdempotency(req, 'salon.walkin', `${req.auth!.userId}:${ctx.salonId}`, b, async () => {
       checkStart(b.startsAt.getTime(), { allowPastMin: 30 });
-      const id = await withTx(deps.pool, async (c) => {
+      const id = await withAlternatives(ctx.salonId, b.staffId, b.serviceIds, b.startsAt.getTime(), () => retryTx(() => withTx(deps.pool, async (c) => {
+        await lockStaffDay(c, b.staffId, b.startsAt.getTime());
         await sweepExpiredHolds(c, b.staffId);
         const plan = await planBooking(c, ctx.salonId, b.staffId, b.serviceIds);
         const startMs = b.startsAt.getTime();
@@ -252,10 +333,10 @@ export function register(api: Api) {
           await insertItems(c, ins.rows[0]!.id, plan.items);
           return ins.rows[0]!.id;
         } catch (err) {
-          if ((isPgError(err, '23P01') || isPgError(err, '40P01'))) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
+          if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
           throw err;
         }
-      });
+      })));
       await auditReq(req, { action: 'booking.walk_in', entity: 'booking', entityId: id });
       return { status: 201, body: { data: bookingDto((await fetchBooking(deps.pool, id))!, qrSecret, false) } };
     });
@@ -273,13 +354,18 @@ export function register(api: Api) {
     const b = parse(rescheduleSchema, req.body);
     const id = parse(uuid, req.params['bookingId']);
     checkStart(b.startsAt.getTime(), { allowPastMin: 0 });
-    await withTx(deps.pool, async (c) => {
+    const before = await deps.pool.query<{ staff_id: string; ids: string[] }>(
+      'SELECT b.staff_id, COALESCE((SELECT array_agg(service_id ORDER BY position) FROM booking_items WHERE booking_id = b.id AND service_id IS NOT NULL), \'{}\') AS ids FROM bookings b WHERE b.id = $1 AND b.salon_id = $2',
+      [id, ctx.salonId],
+    );
+    await withAlternatives(ctx.salonId, b.staffId ?? before.rows[0]?.staff_id ?? '', before.rows[0]?.ids ?? [], b.startsAt.getTime(), () => retryTx(() => withTx(deps.pool, async (c) => {
       const cur = await c.query<{ status: string; version: number; staff_id: string }>('SELECT status, version, staff_id FROM bookings WHERE id = $1 AND salon_id = $2 FOR UPDATE', [id, ctx.salonId]);
       const row = cur.rows[0];
       if (!row) throw E.notFound('Booking');
       if (row.version !== b.version) throw new AppError('VERSION_MISMATCH', 'The booking was changed by someone else; reload and retry', { currentVersion: row.version });
       if (row.status !== 'confirmed') throw E.conflict(`A ${row.status} booking cannot be rescheduled`, 'INVALID_STATE');
       const staffId = b.staffId ?? row.staff_id;
+      await lockStaffDay(c, staffId, b.startsAt.getTime());
       const svc = await c.query<{ service_id: string }>('SELECT service_id FROM booking_items WHERE booking_id = $1 AND service_id IS NOT NULL ORDER BY position', [id]);
       if (!svc.rows.length) throw E.conflict('Booking has no reschedulable services', 'INVALID_STATE');
       const plan = await planBooking(c, ctx.salonId, staffId, svc.rows.map((s) => s.service_id));
@@ -297,10 +383,10 @@ export function register(api: Api) {
         await c.query('DELETE FROM booking_items WHERE booking_id = $1', [id]);
         await insertItems(c, id, plan.items);
       } catch (err) {
-        if ((isPgError(err, '23P01') || isPgError(err, '40P01'))) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
+        if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That staff member is already booked at that time');
         throw err;
       }
-    });
+    })));
     await auditReq(req, { action: 'booking.rescheduled', entity: 'booking', entityId: id });
     send(res, bookingDto((await fetchBooking(deps.pool, id))!, qrSecret, false));
   });
@@ -344,7 +430,7 @@ export function register(api: Api) {
     send(res, bookingDto((await fetchBooking(deps.pool, id))!, qrSecret, false));
   });
 
-  api.post('/salons/:salonId/checkin', { summary: 'Check a customer in by QR token (atomic)', tag: 'Salon bookings', auth: 'salon', perm: 'checkin.scan', body: checkinSchema, returns: 'Booking', note: '409 ALREADY_CHECKED_IN on a second scan; 403 for another salon\'s QR; 409 OUT_OF_WINDOW outside [start-30m, end+60m]. Works in read-only mode.' }, async (req, res) => {
+  api.post('/salons/:salonId/checkin', { summary: 'Check a customer in by QR token (atomic)', tag: 'Salon bookings', auth: 'salon', perm: 'checkin.scan', body: checkinSchema, returns: 'Booking', note: '409 ALREADY_CHECKED_IN on a second scan; 403 for another salon\'s QR; 409 OUT_OF_WINDOW outside [start-30m, end+60m]. Works in read-only mode. Rate limited per salon.', limit: [salonLimiter('checkin', deps.config.rateLimit.checkinPerMin)] }, async (req, res) => {
     const ctx = req.salonCtx!;
     const b = parse(checkinSchema, req.body);
     const v = verifyQr(qrSecret, b.qrToken);

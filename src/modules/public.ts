@@ -1,4 +1,5 @@
 import { Api, send } from '../http/api.js';
+import { sendCached } from '../http/httpCache.js';
 import { contactLimiter } from '../http/rateLimit.js';
 import { parse, z, str, optStr, email, phoneE164, uuid } from '../http/validate.js';
 import { E } from '../errors.js';
@@ -56,9 +57,8 @@ export function register(api: Api) {
   const { deps, deps: { config } } = api;
 
   api.get('/plans', { summary: 'Public plans and prices', tag: 'Public', auth: 'none', returns: 'Plan[]' }, async (_req, res) => {
-    const r = await deps.pool.query("SELECT * FROM plans WHERE is_active ORDER BY price_monthly_paise");
-    res.setHeader('Cache-Control', 'public, max-age=60');
-    send(res, r.rows.map(planDto));
+    const data = await deps.cache.getOrLoad('plans', config.cacheTtl.plans, async () => (await deps.pool.query('SELECT * FROM plans WHERE is_active ORDER BY price_monthly_paise')).rows.map(planDto));
+    sendCached(_req, res, { data }, { maxAge: 300, swr: 600 });
   });
 
   api.post('/contact', { summary: 'Website contact form', tag: 'Public', auth: 'none', body: contactSchema, status: 201, note: 'Honeypot field `website` must be empty; bots get a silent 201' }, async (req, res) => {
@@ -78,33 +78,43 @@ export function register(api: Api) {
       shape = SHAPES.find((s) => s.toLowerCase() === q.faceShape!.toLowerCase()) ?? null;
       if (!shape) throw E.validation('Unknown face shape', [{ field: 'faceShape', issue: `must be one of ${SHAPES.join(', ')}` }]);
     }
+    const cv = await deps.cache.version('catalog');
+    const body = await deps.cache.getOrLoad(`hair:v${cv}:${shape ?? '-'}:${q.audience ?? '-'}`, config.cacheTtl.catalog, async () => {
     const r = await deps.pool.query(
       `${HAIR_SQL} WHERE ($1::text IS NULL OR $1 = ANY(h.face_shapes))
          AND ($2::text IS NULL OR h.audience::text = $2 OR (h.audience = 'unisex' AND $2 IN ('men','women')))
        ORDER BY h.name`,
       [shape, q.audience ?? null],
     );
-    res.setHeader('Cache-Control', 'public, max-age=300');
-    send(res, r.rows.map(hairstyleDto), { count: r.rowCount });
+    return { data: r.rows.map(hairstyleDto), meta: { count: r.rowCount } };
+    });
+    sendCached(req, res, body, { maxAge: 300, swr: 3600 });
   });
 
   api.get('/hairstyles/:id', { summary: 'One hairstyle', tag: 'Hairstyles', auth: 'none', returns: 'Hairstyle' }, async (req, res) => {
     const id = parse(uuid, req.params['id']);
-    const r = await deps.pool.query(`${HAIR_SQL} WHERE h.id = $1`, [id]);
-    if (!r.rows[0]) throw E.notFound('Hairstyle');
-    send(res, hairstyleDto(r.rows[0]));
+    const cv = await deps.cache.version('catalog');
+    const dto = await deps.cache.getOrLoad(`hair1:v${cv}:${id}`, config.cacheTtl.catalog, async () => {
+      const r = await deps.pool.query(`${HAIR_SQL} WHERE h.id = $1`, [id]);
+      return r.rows[0] ? hairstyleDto(r.rows[0]) : null;
+    });
+    if (!dto) throw E.notFound('Hairstyle');
+    sendCached(req, res, { data: dto }, { maxAge: 300, swr: 3600 });
   });
 
   api.get('/service-templates', { summary: 'Starter service catalog', tag: 'Services', auth: 'user', returns: 'ServiceTemplate[]' }, async (_req, res) => {
-    const r = await deps.pool.query('SELECT id, category, name, audience, default_duration_min, suggested_price_paise, sort FROM service_templates ORDER BY sort, name');
-    send(res, r.rows.map((t) => ({ id: t.id, category: t.category, name: t.name, audience: t.audience, defaultDurationMin: t.default_duration_min, suggestedPricePaise: t.suggested_price_paise, sort: t.sort })));
+    const data = await deps.cache.getOrLoad('templates', config.cacheTtl.catalog, async () => {
+      const r = await deps.pool.query('SELECT id, category, name, audience, default_duration_min, suggested_price_paise, sort FROM service_templates ORDER BY sort, name');
+      return r.rows.map((t) => ({ id: t.id, category: t.category, name: t.name, audience: t.audience, defaultDurationMin: t.default_duration_min, suggestedPricePaise: t.suggested_price_paise, sort: t.sort }));
+    });
+    sendCached(_req, res, { data }, { maxAge: 3600, swr: 86400, scope: 'private' });
   });
 
   api.get('/permissions', { summary: 'All permission keys', tag: 'Roles', auth: 'user', returns: 'Permission[]' }, async (_req, res) => {
     send(res, Object.entries(PERMISSIONS).map(([key, description]) => ({ key, description })));
   });
 
-  api.get('/invites/:code', { summary: 'Look up a sales invite (prefills the register page)', tag: 'Public', auth: 'none' }, async (req, res) => {
+  api.get('/invites/:code', { summary: 'Look up a sales invite (prefills the register page)', tag: 'Public', auth: 'none', returns: 'InvitePrefill' }, async (req, res) => {
     const code = String(req.params['code']);
     const r = await deps.pool.query(
       `SELECT l.salon_name, l.owner_name, l.phone, l.email, l.city FROM lead_invites i JOIN leads l ON l.id = i.lead_id

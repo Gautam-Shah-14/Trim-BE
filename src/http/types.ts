@@ -5,6 +5,10 @@ import type { Entitlements } from '../lib/entitlements.js';
 import type { Permission } from '../lib/permissions.js';
 import type { PasswordHasher } from '../lib/security.js';
 import type { PaymentGateway } from '../lib/gateway.js';
+import type { CacheService } from '../infra/cache.js';
+import type { RateLimiter } from '../infra/limiter.js';
+import type { JobQueue } from '../infra/queue.js';
+import type { Metrics } from '../infra/metrics.js';
 
 export interface Deps {
   config: Config;
@@ -12,6 +16,12 @@ export interface Deps {
   log: Logger;
   hasher: PasswordHasher;
   gateway: PaymentGateway;
+  cache: CacheService;
+  limiter: RateLimiter;
+  queue: JobQueue;
+  metrics: Metrics;
+  /** error-tracking hook (Sentry compatible): called for unexpected 5xx errors */
+  captureException: (err: unknown, ctx?: Record<string, unknown>) => void;
 }
 
 export interface AuthInfo {

@@ -32,7 +32,7 @@ if (!dry && RAZORPAY_KEY_ID!.startsWith('rzp_live_') && !live) {
   process.exit(1);
 }
 
-const pool = createPool({ url: DATABASE_URL, ssl: ['true', '1'].includes(process.env['DATABASE_SSL'] ?? ''), max: 2 });
+const pool = createPool({ url: DATABASE_URL, ssl: ['true', '1'].includes(process.env['DATABASE_SSL'] ?? ''), sslCaFile: process.env['DATABASE_SSL_CA_FILE'] || undefined, max: 2 });
 try {
   const rz = dry ? null : new Razorpay({ key_id: RAZORPAY_KEY_ID!, key_secret: RAZORPAY_KEY_SECRET! });
   const plans = (await pool.query('SELECT * FROM plans WHERE is_active ORDER BY price_monthly_paise')).rows;

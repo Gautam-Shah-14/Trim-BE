@@ -1,5 +1,6 @@
 import { z, type ZodType } from 'zod';
 import type { RouteDef } from './http/api.js';
+import { ERROR_REASONS, SCHEMAS as RESPONSE_SCHEMAS } from './schemas.js';
 
 type Json = Record<string, any>;
 
@@ -15,43 +16,22 @@ const SCHEMAS: Record<string, Json> = {
     {
       error: obj(
         {
-          code: { type: 'string', enum: ['VALIDATION_FAILED', 'UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'SLOT_TAKEN', 'HOLD_EXPIRED', 'ALREADY_CHECKED_IN', 'VERSION_MISMATCH', 'OUT_OF_WINDOW', 'PLAN_LIMIT', 'SUBSCRIPTION_INACTIVE', 'RATE_LIMITED', 'INTERNAL'] },
+          code: { type: 'string', enum: ['VALIDATION_FAILED', 'UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'SLOT_TAKEN', 'HOLD_EXPIRED', 'ALREADY_CHECKED_IN', 'VERSION_MISMATCH', 'OUT_OF_WINDOW', 'PLAN_LIMIT', 'SUBSCRIPTION_INACTIVE', 'RATE_LIMITED', 'OVERLOADED', 'TIMEOUT', 'INTERNAL'] },
           message: str,
           details: { description: 'Array of {field, issue} for VALIDATION_FAILED; object (e.g. {limit}) for PLAN_LIMIT', oneOf: [{ type: 'array', items: obj({ field: str, issue: str }) }, { type: 'object' }] },
-          reason: { type: 'string', description: 'Machine-readable sub-reason for generic CONFLICT/FORBIDDEN, e.g. CANCEL_CUTOFF, QR_OUTDATED, WRONG_SALON' },
+          reason: { type: 'string', description: 'Stable machine-readable sub-reason for CONFLICT/FORBIDDEN (see x-error-reasons). For a missing salon permission it is the permission key, e.g. billing.void.', enum: [...Object.keys(ERROR_REASONS), 'booking.view', 'booking.create', 'booking.update', 'booking.cancel', 'checkin.scan', 'billing.view', 'billing.create', 'billing.void', 'services.view', 'services.edit', 'staff.view', 'staff.manage', 'roles.manage', 'analytics.view', 'settings.edit', 'payments.configure', 'reviews.reply', 'customers.view'] },
         },
         ['code', 'message'],
       ),
     },
     ['error'],
   ),
-  User: obj({ id: uuid, fullName: str, phone: { type: ['string', 'null'] }, email: { type: ['string', 'null'] }, role: { type: 'string', enum: ['customer', 'salon_user', 'admin', 'sales_agent'] }, avatarMediaId: { type: ['string', 'null'] }, mustChangePassword: { type: 'boolean' } }),
-  Membership: obj({ salonId: uuid, salonName: str, salonStatus: str, staffId: uuid, roleId: uuid, roleName: str, permissions: { type: 'array', items: str }, planCode: str, subscriptionStatus: str, readOnly: { type: 'boolean' }, desktopAccess: { type: 'boolean' } }),
-  AuthTokens: obj({ accessToken: str, refreshToken: str, expiresIn: int }),
-  AuthResult: obj({ accessToken: str, refreshToken: str, expiresIn: int, user: { $ref: '#/components/schemas/User' }, memberships: { type: 'array', items: { $ref: '#/components/schemas/Membership' } }, salon: obj({ id: uuid, name: str, status: str }) }),
-  Booking: obj({
-    id: uuid, salonId: uuid, salonName: str, customerId: { type: ['string', 'null'] }, customerName: str, customerPhone: { type: ['string', 'null'] }, staffId: uuid, staffName: str,
-    source: { enum: ['app', 'walk_in'] }, status: { enum: ['held', 'confirmed', 'checked_in', 'completed', 'cancelled', 'no_show', 'expired'] },
-    startsAt: dt, endsAt: dt, totalDurationMin: int, totalPricePaise: int, holdExpiresAt: { type: ['string', 'null'], format: 'date-time' }, version: int,
-    cancelledReason: { type: ['string', 'null'] }, items: { type: 'array', items: obj({ serviceId: uuid, name: str, durationMin: int, pricePaise: int }) },
-    hasReview: { type: 'boolean' }, qrToken: { type: 'string', description: 'Only on customer GET/confirm while status=confirmed' }, createdAt: dt,
-  }),
-  Invoice: obj({
-    id: uuid, salonId: uuid, bookingId: { type: ['string', 'null'] }, invoiceNo: str, customerName: str, customerPhone: { type: ['string', 'null'] },
-    subtotalPaise: int, discountPaise: int, taxPaise: int, taxLabel: { type: ['string', 'null'] }, totalPaise: int, status: { enum: ['draft', 'paid', 'void'] },
-    items: { type: 'array', items: obj({ serviceId: { type: ['string', 'null'] }, name: str, qty: int, unitPricePaise: int, lineTotalPaise: int }) },
-    payments: { type: 'array', items: obj({ methodCode: str, amountPaise: int, reference: { type: ['string', 'null'] }, paidAt: dt }) }, createdAt: dt,
-  }),
-  Plan: obj({ code: str, name: str, priceMonthlyPaise: int, priceAnnualPaise: int, maxBranches: { type: ['integer', 'null'] }, maxStaff: { type: ['integer', 'null'] }, customRoles: { type: 'boolean' }, desktopAccess: { type: 'boolean' }, analyticsLevel: { enum: ['basic', 'full'] }, csvExport: { type: 'boolean' }, billTemplates: { type: 'boolean' }, trialDays: int }),
-  Availability: obj({ date: str, timezone: str, slots: { type: 'array', items: obj({ staffId: uuid, startsAt: dt, endsAt: dt }) } }),
-  CheckoutResult: obj({ razorpaySubscriptionId: str, keyId: str }),
-  MediaId: obj({ id: uuid }),
 };
 
 const PARAM_FORMAT: Record<string, Json> = { code: str, customerKey: str };
 
-function toSchema(s: ZodType): Json {
-  const j = z.toJSONSchema(s, { io: 'input', unrepresentable: 'any' }) as Json;
+function toSchema(s: ZodType, io: 'input' | 'output' = 'input'): Json {
+  const j = z.toJSONSchema(s, { io, unrepresentable: 'any' }) as Json;
   delete j['$schema'];
   return j;
 }
@@ -82,7 +62,9 @@ export function buildOpenApi(routes: RouteDef[]): Json {
     if (m.raw) {
       responses[status] = { description: m.raw, content: { [m.raw]: { schema: { type: 'string', format: 'binary' } } } };
     } else {
-      const schema = m.returns ? (used.add(m.returns.replace('[]', '')), ref(m.returns)) : { type: 'object' };
+      const returns = m.returns ?? (r.path === '/webhooks/razorpay' ? 'WebhookAck' : 'Ok');
+      used.add(returns.replace('[]', ''));
+      const schema = ref(returns);
       responses[status] = {
         description: 'Success',
         content: { 'application/json': { schema: obj({ data: schema, meta: { type: 'object', description: 'Pagination: limit, nextCursor' } }, ['data']) } },
@@ -109,12 +91,15 @@ export function buildOpenApi(routes: RouteDef[]): Json {
     },
   };
   const schemas: Json = { ...SCHEMAS };
-  for (const n of used) schemas[n] ??= { type: 'object', additionalProperties: true, description: `See spec §6 for the shape of ${n}` };
+  for (const [name, zs] of Object.entries(RESPONSE_SCHEMAS)) schemas[name] = toSchema(zs, 'output');
+  const missing = [...used].filter((n) => !schemas[n]);
+  if (missing.length) throw new Error(`openapi: routes return unknown schemas: ${missing.join(', ')}`);
   return {
     openapi: '3.1.0',
     info: {
       title: 'Trim API', version: '0.1.0',
-      description: 'REST API of the Trim salon platform. Success: `{data, meta?}`. Error: `{error:{code,message,details?}}`. Money = integer paise; times = ISO-8601 UTC; phones = E.164. GENERATED from the route registry by `npm run openapi` - do not edit by hand.',
+      description: 'REST API of the Trim salon platform. Success: `{data, meta?}`. Error: `{error:{code,message,details?}}`. Money = integer paise; times = ISO-8601 UTC; phones = E.164. GENERATED from the route registry and src/schemas.ts by `npm run openapi` - do not edit by hand.',
+      'x-error-reasons': ERROR_REASONS,
     },
     servers: [{ url: '/v1' }],
     security: [{ bearerAuth: [] }],

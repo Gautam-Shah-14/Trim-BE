@@ -7,7 +7,7 @@ if (!url) {
   console.error('DATABASE_URL is not set (see .env.example)');
   process.exit(1);
 }
-const pool = createPool({ url, ssl: ['true', '1'].includes(process.env['DATABASE_SSL'] ?? ''), max: 2 });
+const pool = createPool({ url, ssl: ['true', '1'].includes(process.env['DATABASE_SSL'] ?? ''), sslCaFile: process.env['DATABASE_SSL_CA_FILE'] || undefined, max: 2 });
 try {
   const r = await seedReference(pool);
   console.log(`Seeded ${r.templates} service templates and ${r.hairstyles} hairstyles.`);

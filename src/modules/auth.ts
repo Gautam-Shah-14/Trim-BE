@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import type pg from 'pg';
-import { Api, getPlans, send } from '../http/api.js';
-import { loginLimiter, authLimiter } from '../http/rateLimit.js';
+import { Api, bumpUser, getPlans, send } from '../http/api.js';
+import { loginLimiter, registerLimiter, refreshLimiter } from '../http/rateLimit.js';
 import { parse, z, str, optStr, phoneE164, email, password } from '../http/validate.js';
 import { E, AppError } from '../errors.js';
 import { withTx, isPgError } from '../db.js';
@@ -180,7 +180,7 @@ export function register(api: Api) {
     } catch (err) {
       throw conflictFromUnique(err) ?? err;
     }
-  }, [authLimiter(Math.max(5, Math.round(config.rateLimit.generalPerMin / 10)))]);
+  }, [registerLimiter('register', () => config.rateLimit.registerPerHour)]);
 
   api.post('/auth/register-owner', { summary: 'Register a salon owner (creates pending salon + 14-day Pro trial)', tag: 'Auth', auth: 'none', body: ownerSchema, returns: 'AuthResult', status: 201 }, async (req, res) => {
     const b = parse(ownerSchema, req.body);
@@ -211,7 +211,7 @@ export function register(api: Api) {
     } catch (err) {
       throw conflictFromUnique(err) ?? err;
     }
-  }, [authLimiter(Math.max(5, Math.round(config.rateLimit.generalPerMin / 10)))]);
+  }, [registerLimiter('register-owner', () => config.rateLimit.registerPerHour)]);
 
   api.post('/auth/login', { summary: 'Log in with phone/email + password', tag: 'Auth', auth: 'none', body: loginSchema, returns: 'AuthResult', note: 'client=desktop requires the desktop_access entitlement (403 PLAN_LIMIT)' }, async (req, res) => {
     const b = parse(loginSchema, req.body);
@@ -280,6 +280,7 @@ export function register(api: Api) {
       await c.query('UPDATE sessions SET revoked_at = now(), replaced_by = $2 WHERE id = $1', [row.id, tokens.sessionId]);
       return { tokens, user };
     });
+    await deps.cache.bump(`user:${'tokens' in result && result.user ? result.user.id : ('reuse' in result && result.reuse ? result.reuse.user_id : '')}`);
     if ('err' in result) {
       if ('reuse' in result && result.reuse) {
         await audit(deps.pool, { actorUserId: result.reuse.user_id, action: 'auth.refresh_reuse', entity: 'session', entityId: result.reuse.id, ip: req.ip });
@@ -287,15 +288,17 @@ export function register(api: Api) {
       throw result.err;
     }
     send(res, { accessToken: result.tokens.accessToken, refreshToken: result.tokens.refreshToken, expiresIn: result.tokens.expiresIn });
-  }, [authLimiter(Math.max(10, Math.round(config.rateLimit.generalPerMin / 5)))]);
+  }, [refreshLimiter(Math.max(10, Math.round(config.rateLimit.generalPerMin / 5)))]);
 
   api.post('/auth/logout', { summary: 'Revoke the current session', tag: 'Auth', auth: 'user' }, async (req, res) => {
     await deps.pool.query('UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL', [req.auth!.sessionId]);
+    bumpUser(res, req.auth!.userId);
     send(res, { ok: true });
   });
 
   api.post('/auth/logout-all', { summary: 'Revoke every session of the user', tag: 'Auth', auth: 'user' }, async (req, res) => {
     await deps.pool.query('UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [req.auth!.userId]);
+    bumpUser(res, req.auth!.userId);
     send(res, { ok: true });
   });
 
@@ -309,6 +312,7 @@ export function register(api: Api) {
       await c.query('UPDATE users SET password_hash = $2, must_change_password = false, updated_at = now() WHERE id = $1', [req.auth!.userId, hash]);
       await c.query('UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL', [req.auth!.userId, req.auth!.sessionId]);
     });
+    bumpUser(res, req.auth!.userId);
     await auditReq(req, { action: 'auth.password_changed', entity: 'user', entityId: req.auth!.userId });
     send(res, { ok: true });
   });
