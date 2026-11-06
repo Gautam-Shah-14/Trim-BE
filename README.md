@@ -56,7 +56,8 @@ All configuration comes from environment variables, validated with zod at startu
 | `BODY_LIMIT_KB` / `MEDIA_BODY_LIMIT_KB` | 100 / 400 | JSON body limits |
 | `REQUEST_TIMEOUT_MS` | 15000 | request timeout (504 `TIMEOUT`) |
 | `LOAD_SHED_LAG_MS` / `LOAD_SHED_POOL_WAITING` | 500 / 50 | event-loop lag and DB pool waiters above which optional reads get 503 |
-| `METRICS_ENABLED` / `METRICS_TOKEN` | true / empty | `GET /metrics`; with a token it needs `Authorization: Bearer <token>` |
+| `METRICS_ENABLED` / `METRICS_TOKEN` | true / empty | `GET /metrics`; with a token it needs `Authorization: Bearer <token>` or `X-Metrics-Token`. **Production refuses to start with metrics enabled and no token** |
+| `BFF_SHARED_SECRET` | empty | >= 24 chars; the website server sends it as `X-Trim-BFF-Key` with `X-Trim-Client-IP` so per-visitor rate limits work behind the proxy (see docs/CONTRACT_DECISIONS.md). Warned about at start-up in production when empty |
 | `ARGON2_MEMORY_KIB` | 19456 | argon2id memory cost |
 
 ## Scripts

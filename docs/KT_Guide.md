@@ -53,6 +53,7 @@ Add it to `PERMISSIONS` and the default role lists in `src/lib/permissions.ts`. 
 - **Process modes:** `WORKER_MODE=both` locally. In production split into `api` and `worker` services with the same image and env.
 - **Tests that touch caches:** the test config sets every `CACHE_TTL_*` to 0 so SQL edits are visible at once; `tests/scale.test.ts` boots contexts with TTLs on.
 - **Remote database caveats:** behind the Supabase transaction pooler set `DB_POOLER=true`; the pg-boss queue needs a direct connection and a role that may create its schema (`QUEUE_DATABASE_URL`), otherwise use `QUEUE_ENABLED=false`. A DML-only role cannot run `npm run migrate`; apply migrations with an owner role (the coordinator does it through the Supabase connector). Every new table must `ENABLE ROW LEVEL SECURITY` in its own migration (0010 only covered the tables that existed).
+- **Behind the website:** set the same `BFF_SHARED_SECRET` on the API and the website; without it every website visitor shares one rate-limit bucket (the proxy IP). Production start-up logs a warning when it is empty, and requires `METRICS_TOKEN` while metrics are enabled.
 - **Load tests:** see `loadtest/README.md`. Never point k6 at production without the owner's approval.
 
 ## Runbook: Razorpay (TEST mode)

@@ -67,6 +67,8 @@ components:
                 - SUBSCRIPTION_INACTIVE
                 - RATE_LIMITED
                 - OVERLOADED
+                - UPSTREAM_ERROR
+                - METHOD_NOT_ALLOWED
                 - TIMEOUT
                 - INTERNAL
             message:

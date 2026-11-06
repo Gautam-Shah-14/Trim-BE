@@ -4,6 +4,11 @@ All notable changes to Trim-BE. Format: [Keep a Changelog](https://keepachangelo
 
 ## [Unreleased]
 
+### QA round 3 (2026-11-07 report)
+Contract-affecting (additive): website must send `X-Trim-BFF-Key` + `X-Trim-Client-IP` (W); lockout 429 now has `Retry-After` and `details.retryAfterSec` (all clients); NUL characters are `422 VALIDATION_FAILED`; provider failure on checkout/cancel is `502 UPSTREAM_ERROR` with `reason: PAYMENT_PROVIDER` instead of 500 (W, S, D); wrong method gives `405 METHOD_NOT_ALLOWED` with `Allow` instead of 404.
+- D-01 authenticated BFF client IP (`BFF_SHARED_SECRET`); D-02 NUL rejection at the edge; D-03 lockout `Retry-After`; D-04 webhook worker polls every 0.5 s with batches of 10 and 2 workers; D-05 `/metrics` token mandatory in production (Bearer or `X-Metrics-Token`), config refuses to start otherwise; D-06 export-range test uses the salon-local date; D-08 502 `UPSTREAM_ERROR`; D-09 405; D-15 test Postgres initialised with `--encoding=UTF8`, new non-ASCII round-trip test.
+- Not changed: the register limiter still counts rejected requests (5 typos from one NAT block sign-up for an hour; revisit if it bites), avatar read access (D-13) and magic-byte-only media validation (D-14) are by design.
+
 ### Contract additions (all additive; existing response shapes unchanged)
 Affected clients are listed per item (C = customer app, S = salon app, D = desktop, W = website).
 - `POST /bookings/hold`, walk-in and reschedule: `409 SLOT_TAKEN` now carries `details.alternatives[{staffId,startsAt,endsAt}]` (C, S, D). Offer them for one-tap re-booking.

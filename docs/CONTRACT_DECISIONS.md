@@ -4,11 +4,21 @@
 
 Envelope: success `{ "data": ..., "meta"?: ... }`; error `{ "error": { "code", "message", "details"?, "reason"? } }`. Money is integer paise, times ISO-8601 UTC, phones E.164. Lists with `meta.nextCursor` (null when finished) take `?limit=` (max 100) and `?cursor=` (opaque). Discover uses an opaque offset cursor, everything else keyset.
 
+## Website (BFF) client IP header contract
+The website's server calls this API from shared egress IPs, so per-IP rate limits would otherwise treat every visitor as one client. Configure the same secret (>= 24 characters) as `BFF_SHARED_SECRET` on the API and on the website, and on every proxied request send:
+
+| Header | Value |
+|---|---|
+| `X-Trim-BFF-Key` | the shared secret |
+| `X-Trim-Client-IP` | the visitor's IPv4 or IPv6 address, exactly one literal (no port, no list, no zone id) |
+
+The API uses that address as the client IP (rate limiting, audit log `ip`, logs) only when the key matches (constant-time compare) and the address is valid; otherwise both headers are silently ignored, never trusted unauthenticated. Direct clients (mobile apps, desktop) send neither header and keep the normal `TRUST_PROXY` behaviour. With `BFF_SHARED_SECRET` unset the headers are always ignored. Do not forward the key to browsers.
+
 ## Errors
 
 | HTTP | `code` | notes |
 |---|---|---|
-| 422 | `VALIDATION_FAILED` | `details: [{field, issue}]`; unknown body fields are rejected (`issue: "unknown field"`); also bad JSON and 413 oversize bodies |
+| 422 | `VALIDATION_FAILED` | `details: [{field, issue}]`; NUL characters (`\u0000`, `%00`) in any path, query or JSON string are rejected here; unknown body fields are rejected (`issue: "unknown field"`); also bad JSON and 413 oversize bodies |
 | 401 | `UNAUTHENTICATED` | also invalid webhook signature |
 | 403 | `FORBIDDEN` | `reason` = the missing permission key (e.g. `billing.void`), or `WRONG_SALON`, `SYSTEM_ROLE`, `OWNER_ROLE_LOCKED` |
 | 404 | `NOT_FOUND` | |
@@ -16,8 +26,10 @@ Envelope: success `{ "data": ..., "meta"?: ... }`; error `{ "error": { "code", "
 | 409 | `CONFLICT` | `reason` is stable, see table below |
 | 403 | `PLAN_LIMIT` | `details: {limit, max?, current?}` where `limit` is `max_staff`, `custom_roles`, `desktop_access`, `csv_export`, `bill_templates` |
 | 403 | `SUBSCRIPTION_INACTIVE` | the salon is read-only (trial over, halted, cancelled, expired, suspended) |
-| 429 | `RATE_LIMITED` | headers `Retry-After` (seconds), `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`. `details.retryAfterSec`. Locked account: `details.lockedUntil` |
+| 429 | `RATE_LIMITED` | headers `Retry-After` (seconds), `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`. `details.retryAfterSec`. Locked account (too many failed logins): `Retry-After` header, `details.retryAfterSec` and `details.lockedUntil` |
 | 503 | `OVERLOADED` | load shedding of optional reads; `Retry-After: 5` |
+| 502 | `UPSTREAM_ERROR` | a payment-provider call failed (checkout, cancel); `reason: PAYMENT_PROVIDER`; no internals in the message; retry later |
+| 405 | `METHOD_NOT_ALLOWED` | known path, wrong method; `Allow` header lists the right ones |
 | 504 | `TIMEOUT` | request exceeded `REQUEST_TIMEOUT_MS` (15 s) |
 | 500 | `INTERNAL` | message quotes the request id |
 
