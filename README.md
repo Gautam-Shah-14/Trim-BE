@@ -21,26 +21,43 @@ Requirements: Node >= 24 and PostgreSQL 15+ with `pgcrypto`, `btree_gist`, `cite
 
 All configuration comes from environment variables, validated with zod at startup (the process exits with a readable message if something is wrong). Never commit `.env`.
 
-| Variable | Required | Meaning |
+| Variable | Default | Meaning |
 |---|---|---|
-| `NODE_ENV` | no (development) | `development`, `test`, `production`. Production also requires the Razorpay vars and `CORS_ORIGINS` |
-| `PORT` | no (8080) | HTTP port |
-| `LOG_LEVEL` | no (info) | pino level |
-| `DATABASE_URL` | yes | Postgres connection string |
-| `DATABASE_SSL` | no (false) | `true` for hosts that need TLS (Supabase) |
-| `DATABASE_POOL_MAX` | no (10) | pool size |
-| `JWT_SECRET` | yes | HS256 secret, >= 32 chars |
-| `QR_SECRET` | yes | HMAC secret for booking QR tokens, >= 32 chars |
+| `NODE_ENV` | development | `development`, `test`, `production`. Production also requires the Razorpay vars and `CORS_ORIGINS` |
+| `PORT` | 8080 | HTTP port |
+| `LOG_LEVEL` | info | pino level |
+| `DATABASE_URL` | required | Postgres connection string |
+| `DATABASE_SSL` | false | `true` for hosts that need TLS (Supabase). Certificates are always verified |
+| `DATABASE_SSL_CA_FILE` | empty | PEM CA to trust, path relative to the repo root (e.g. `certs/supabase-prod-ca-2021.crt`); empty = Node default trust store |
+| `DB_POOLER` | false | `true` behind a transaction pooler (Supabase :6543): no startup parameters, timeouts via `SET LOCAL` per transaction |
+| `DB_POOL_MAX` | 10 | pooled connections per instance (`DATABASE_POOL_MAX` is an alias) |
+| `STATEMENT_TIMEOUT_MS` / `LOCK_TIMEOUT_MS` / `IDLE_TX_TIMEOUT_MS` | 5000 / 2000 / 10000 | per-query, lock-wait and idle-in-transaction timeouts (0 disables) |
+| `JWT_SECRET` | required | HS256 secret, >= 32 chars |
+| `QR_SECRET` | required | HMAC secret for booking QR tokens, >= 32 chars |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | prod | Razorpay API keys (test keys until launch) |
 | `RAZORPAY_WEBHOOK_SECRET` | prod | secret configured on the Razorpay webhook |
 | `CORS_ORIGINS` | prod | comma-separated browser origins |
-| `WEBSITE_URL` | no | base URL for sales invite links |
-| `TRUST_PROXY` | no (1) | number of proxies in front (Render = 1) |
-| `HOLD_SWEEPER_ENABLED` | no (true) | in-process 30 s sweeper of expired holds |
-| `RATE_LIMIT_GENERAL_PER_MIN` | no (300) | per IP |
-| `RATE_LIMIT_LOGIN_PER_15MIN` | no (10) | per IP + identifier |
-| `RATE_LIMIT_CONTACT_PER_HOUR` | no (5) | per IP |
-| `ARGON2_MEMORY_KIB` | no (19456) | argon2id memory cost |
+| `WEBSITE_URL` | http://localhost:3000 | base URL for sales invite links |
+| `TRUST_PROXY` | 1 | number of proxies in front (Render = 1) |
+| `WORKER_MODE` | both | `api`, `worker` or `both` |
+| `QUEUE_ENABLED` | true | `false` runs jobs inline inside the request |
+| `QUEUE_DRIVER` | pgboss | `pgboss` (Postgres, durable) or `memory` |
+| `QUEUE_DATABASE_URL` | empty | direct (non-pooler, schema-owner) connection for pg-boss; falls back to `DATABASE_URL` |
+| `QUEUE_MAX_DEPTH` | 5000 | optional reads are shed (503) above this backlog |
+| `CACHE_DRIVER` / `RATE_LIMIT_DRIVER` | memory | `memory` or `redis` (needs `REDIS_URL`) |
+| `REDIS_URL` | empty | Redis connection string for the redis drivers |
+| `CACHE_TTL_PLANS_S` / `_CATALOG_S` / `_SALON_PUBLIC_S` / `_DISCOVER_S` / `_AVAILABILITY_S` / `_ENTITLEMENTS_S` / `_SESSION_S` | 3600 / 86400 / 120 / 45 / 8 / 30 / 30 | cache TTLs in seconds (0 disables) |
+| `RATE_LIMIT_GENERAL_PER_MIN` | 300 | per IP |
+| `RATE_LIMIT_LOGIN_PER_15MIN` | 10 | per IP + identifier |
+| `RATE_LIMIT_CONTACT_PER_HOUR` / `RATE_LIMIT_REGISTER_PER_HOUR` | 5 / 5 | per IP |
+| `RATE_LIMIT_AVAILABILITY_PER_MIN` / `RATE_LIMIT_HOLD_PER_MIN` | 60 / 10 | per user (IP when anonymous) |
+| `RATE_LIMIT_CHECKIN_PER_MIN` | 120 | per salon |
+| `MAX_HELD_PER_CUSTOMER` / `MAX_UPCOMING_PER_CUSTOMER` / `MAX_BOOKINGS_PER_DAY` | 3 / 10 / 5 | slot-hoarding caps |
+| `BODY_LIMIT_KB` / `MEDIA_BODY_LIMIT_KB` | 100 / 400 | JSON body limits |
+| `REQUEST_TIMEOUT_MS` | 15000 | request timeout (504 `TIMEOUT`) |
+| `LOAD_SHED_LAG_MS` / `LOAD_SHED_POOL_WAITING` | 500 / 50 | event-loop lag and DB pool waiters above which optional reads get 503 |
+| `METRICS_ENABLED` / `METRICS_TOKEN` | true / empty | `GET /metrics`; with a token it needs `Authorization: Bearer <token>` |
+| `ARGON2_MEMORY_KIB` | 19456 | argon2id memory cost |
 
 ## Scripts
 
@@ -53,11 +70,12 @@ All configuration comes from environment variables, validated with zod at startu
 | `npm run migrate` / `npm run seed` | apply migrations / seed reference data |
 | `npm run openapi` | regenerate `openapi.yaml` from the route registry (CI fails if stale) |
 | `npm run admin:create` | create/promote an admin (env: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`) |
+| `npm run loadtest:check` | after a k6 run: asserts zero overlapping active bookings (see `loadtest/`) |
 | `npm run razorpay:plans -- --dry-run` | create the 4 Razorpay plans from the `plans` table (owner runs this with TEST keys; never run by CI) |
 
 ## Tests
 
-`npm test` needs no Docker and no installed Postgres: `tests/globalSetup.ts` boots **embedded-postgres** (real PostgreSQL 18 binaries incl. `btree_gist`), migrates and seeds a template database once, and each test file clones it. Suites: slot maths across timezones/DST/closures/time off, QR, entitlements, RBAC defaults, validation, and API-level integration including the spec section 7 concurrency rules (50 parallel holds, partial overlaps, hold expiry, idempotency keys, double check-in, optimistic versions, 30 parallel invoices, webhook replay/out-of-order, max_staff race). Last run: 5 files, 86 tests passing.
+`npm test` needs no Docker and no installed Postgres: `tests/globalSetup.ts` boots **embedded-postgres** (real PostgreSQL 18 binaries incl. `btree_gist`), migrates and seeds a template database once, and each test file clones it. Suites: slot maths across timezones/DST/closures/time off, QR, entitlements, RBAC defaults, validation, and API-level integration including the spec section 7 concurrency rules (50 parallel holds, partial overlaps, hold expiry, idempotency keys, double check-in, optimistic versions, 30 parallel invoices, webhook replay/out-of-order, max_staff race), plus rate limiting, cache invalidation, queue-backed webhook (pg-boss), 409 alternatives, hoarding caps, rollups/exports, TLS option builder, RLS migration and a contract test that validates responses against `src/schemas.ts`. Last run: 9 files, 122 tests passing.
 
 ## Structure
 

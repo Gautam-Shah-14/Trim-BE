@@ -45,6 +45,16 @@ Add it to `PERMISSIONS` and the default role lists in `src/lib/permissions.ts`. 
 - Tests set `ARGON2_MEMORY_KIB=1024` and huge rate limits; real config uses the defaults.
 - On Windows, if `npm install` blocks install scripts, run `node scripts/hydrate-symlinks.js` inside `node_modules/@embedded-postgres/windows-x64` once (it recreates files embedded-postgres needs).
 
+## Scale features: how to work with them
+- **Caches** are invisible to handlers except for invalidation: any non-GET request on a `/salons/:salonId/...` route bumps that salon's version key automatically. If a handler changes salon data from a route WITHOUT `:salonId` (customer booking routes, admin routes, webhooks), call `bumpSalon(res, id)` / `bumpUser(res, id)` / `bumpPlans(res)` before responding (or `applyBump(deps, ...)` in a job). Forgetting this serves stale data for up to the TTL.
+- **Cache a new read:** `deps.cache.getOrLoad(key, ttlSeconds, loader)`, put the relevant version in the key (`await deps.cache.version('salon:<id>')`), return JSON-safe values only (dates become strings), and send with `sendCached(req, res, body, {maxAge, swr})` for public data. Never cache user-specific data under a shared key.
+- **Rate limit a route:** pass `limit: [userLimiter('name', perMin)]` in the route metadata (runs after auth) or put a limiter in the `pre` array (runs before auth, keyed by IP). New env vars go in `config.ts`, `.env.example` and the README table.
+- **Add a job:** `queue.register('name', handler)` in `src/jobs/index.ts` (handlers must be idempotent), `queue.enqueue('name', data, {singletonKey})` to trigger, `queue.every('name', ms)` in `scheduleRecurring` for recurring work. In tests the queue is in-memory: `await ctx.deps.queue.drain()` waits for jobs.
+- **Process modes:** `WORKER_MODE=both` locally. In production split into `api` and `worker` services with the same image and env.
+- **Tests that touch caches:** the test config sets every `CACHE_TTL_*` to 0 so SQL edits are visible at once; `tests/scale.test.ts` boots contexts with TTLs on.
+- **Remote database caveats:** behind the Supabase transaction pooler set `DB_POOLER=true`; the pg-boss queue needs a direct connection and a role that may create its schema (`QUEUE_DATABASE_URL`), otherwise use `QUEUE_ENABLED=false`. A DML-only role cannot run `npm run migrate`; apply migrations with an owner role (the coordinator does it through the Supabase connector). Every new table must `ENABLE ROW LEVEL SECURITY` in its own migration (0010 only covered the tables that existed).
+- **Load tests:** see `loadtest/README.md`. Never point k6 at production without the owner's approval.
+
 ## Runbook: Razorpay (TEST mode)
 1. Razorpay dashboard in Test Mode: Settings > API Keys > generate. Put `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` in `.env` (never in git).
 2. Create plans: `npm run razorpay:plans -- --dry-run`, then `npm run razorpay:plans`. It creates starter/pro x monthly/annual from the `plans` table (notes `app=trim`) and stores the ids in the DB. The account is shared with another product; everything created here is tagged. The script refuses `rzp_live_` keys without `--live`.

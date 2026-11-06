@@ -86,6 +86,80 @@ sequenceDiagram
 - Webhook: raw body, HMAC-SHA256, timing-safe compare. Events whose notes lack `app:"trim"` are ignored (shared Razorpay account).
 - Secrets only from env; pino redacts auth headers and token fields; CSV export neutralises formula injection. helmet, CORS allow-list, request ids on every response.
 
+## Scale design (spec section 11)
+
+Principle: **correctness never depends on cache, Redis or the queue.** The database constraints (booking exclusion constraint, unique idempotency / webhook / invoice keys, counters) are the only authority; everything below is an optimisation or protection layer that can fail without affecting correctness.
+
+### Stages (same code, chosen by environment)
+
+| Stage | Load (planning numbers, unconfirmed) | Shape | Settings |
+|---|---|---|---|
+| A | up to ~10k req/day | 1 API instance, `WORKER_MODE=both`, in-memory cache + limiter, pg-boss queue | defaults |
+| B | ~100k req/day | 2+ API instances + 1 worker, managed Redis, Supabase Pro + transaction pooler, CDN on public GETs | `CACHE_DRIVER=redis`, `RATE_LIMIT_DRIVER=redis`, `REDIS_URL`, `DB_POOLER=true`, `DB_POOL_MAX` = pooler limit / instances, `QUEUE_DATABASE_URL` (direct), API `WORKER_MODE=api`, worker `WORKER_MODE=worker` |
+| C | ~1M req/day | autoscaled API, separate worker, Redis, CDN, read replica for analytics/search, partitioned big tables | as B plus replica + partitions (not built) |
+
+Honest limit: Stage B/C behaviour has **not** been load tested. The k6 scripts exist (`loadtest/`) but were not run, and the Redis drivers have only been tested against an in-memory fake (no live Redis). The memory cache does not propagate invalidation between instances, so more than one API instance requires `CACHE_DRIVER=redis` (or TTLs of a few seconds).
+
+```mermaid
+flowchart LR
+  CDN[CDN / browser cache: ETag + max-age on public GETs] --> API1[API instance]
+  CDN --> API2[API instance]
+  API1 & API2 --> R[(Redis: cache, limits, version keys)]
+  API1 & API2 --> PG[(Postgres via pooler)]
+  API1 & API2 -->|enqueue| Q[(pg-boss in Postgres)]
+  W[Worker: razorpay.event, booking.sweep, webhook.retry, stats.rollup, export.run, audit.retention] --> Q
+  W --> PG
+```
+
+### Caching map (`src/infra/cache.ts`: Cache driver + CacheService)
+CacheService = cache-aside with single-flight (one loader per key), +-10 % TTL jitter, stale-while-revalidate (entries live 3x their TTL), version keys, and "driver failure falls through to the DB". TTL 0 disables a cache (tests use that).
+
+| What | Key | TTL (env) | Invalidation |
+|---|---|---|---|
+| plans | `plans` (+ in-process copy) | 1 h (`CACHE_TTL_PLANS_S`) | admin plan edit deletes it |
+| service templates, hairstyles | `templates`, `hair:v<catalog>:...` | 24 h (`..._CATALOG_S`) | `catalog` version bumped by admin hairstyle CRUD |
+| public salon profile | `pub:salon:<id>:v<salonVersion>` | 120 s | `salon:<id>` version bumped by ANY non-GET request with that salonId (profile, services, staff, roles, hours, closures, subscription), by booking/review changes and by the webhook worker |
+| discovery search | `disc:v<discoverVersion>:<hash of filters + position snapped to ~110 m>` | 45 s | `discover` version bumped with every salon bump |
+| availability answer | `avail:<salon>:v<salonVersion>:<date>:<services>:<staff>` | 8 s | salon version bump on any hold/confirm/cancel/walk-in/reschedule; the hold re-verifies in the DB anyway |
+| session lookup | `sess:<sid>:<userVersion>` | 30 s | `user:<id>` version bumped on logout, logout-all, password change, refresh rotation/reuse, deactivation, account deletion |
+| salon context (salon + subscription + membership/permissions) | `sctx:<salon>:<user>:v<salonVersion>` | 30 s | salon version bump (role/staff/subscription changes all pass through a salon-scoped route, webhook worker or admin action); entitlements are recomputed from the cached rows on every request so trial expiry is exact |
+
+Invalidation happens in `Api` (`installBump`): the response is only released after the version keys were bumped, so a client never reads its own write from a stale cache. Authenticated and permission-dependent data is never shared between users (keys include the user id).
+HTTP: public GETs send `ETag` (weak, body hash) + `Cache-Control: public, max-age, stale-while-revalidate` and answer `If-None-Match` with 304; media uses its SHA-256 ETag and a 1-day cache.
+
+### Rate limiting and abuse protection (`src/infra/limiter.ts`, `src/http/rateLimit.ts`)
+Sliding-window counter; memory driver, or Redis driver that **fails open**. Limits: general per IP, login per IP+identifier (plus account lockout), register per IP, contact per IP, availability per user/IP, hold per user, check-in per salon, async export per user; the Razorpay webhook is exempt (signature verified). 429 carries `Retry-After` and `RateLimit-Limit/Remaining/Reset`. Slot hoarding caps per customer (3 active holds, 10 upcoming confirmed, 5 created per 24 h) are checked inside the hold transaction under a per-customer advisory lock, so they are exact under parallel requests. Hard limits: body 100 KB (media 400 KB), request timeout 15 s, `statement_timeout` 5 s, `lock_timeout` 2 s, `idle_in_transaction_session_timeout` 10 s (via startup options, or `SET LOCAL` per transaction when `DB_POOLER=true`).
+
+### Hot slot (`POST /bookings/hold`)
+1. Availability is advisory. One atomic `INSERT` guarded by the exclusion constraint decides.
+2. A per-staff/day transaction advisory lock queues contenders first: it is purely an optimisation that removes exclusion-constraint deadlock cycles (each costing `deadlock_timeout` = 1 s). The 50-way stampede test failed with lock timeouts before this was added.
+3. Losers get `409 SLOT_TAKEN` with `details.alternatives` (next <= 3 free starts for the same staff/services). Deadlock / serialization / lock-timeout errors retry the whole transaction up to 2 times with jitter, then 409 (or 503 for lock timeout).
+4. Expired holds are ignored by availability (predicate) and swept lazily inside the hold transaction (`FOR UPDATE SKIP LOCKED`) and by the `booking.sweep` job.
+5. Optional Redis fast-fail (`SET NX` on staff+start, 5 s) rejects obvious duplicates before the DB; only active with `CACHE_DRIVER=redis`, released when the hold fails, never trusted for correctness.
+
+### Queue and workers (`src/infra/queue.ts`, `src/jobs`)
+`JobQueue` has three implementations: **pg-boss** (Postgres, durable, retries with backoff; default), in-memory (tests/dev) and inline (`QUEUE_ENABLED=false`: handlers run inside the request). `WORKER_MODE=api|worker|both`: API-only processes only enqueue; a worker-only process exposes just `/health` and `/ready`. Jobs are idempotent.
+
+| Job | Trigger | What |
+|---|---|---|
+| `razorpay.event` | webhook request | apply a stored event once (row lock + `processed_at`), then invalidate the salon cache. The endpoint itself only verifies the signature, stores the event (unique id) and returns 200 |
+| `webhook.retry` | every 60 s | re-enqueue events stored > 30 s ago and still unprocessed (lost job, worker crash, queue down) |
+| `booking.sweep` | every 30 s | expire holds |
+| `stats.rollup` | hourly | rebuild `daily_salon_stats` for the last 3 days (day / staff / service rows) |
+| `audit.retention` | daily | drop audit rows > 400 days, idempotency keys > 48 h, export jobs > 14 days |
+| `export.run` | export request | build an invoice CSV for ranges > 92 days or `POST .../analytics/export` (202 + job id) |
+
+Recurring jobs are triggered by an interval in each consuming process and de-duplicated by singleton keys. Notifications and contact-message e-mail are not implemented (no sender configured).
+
+### Resilience and observability
+Graceful shutdown (stop accepting, drain queue, close pools), `/health` liveness, `/ready` (DB gates readiness; queue and cache are reported but degrade gracefully), `/metrics` (Prometheus text: request counts + latency histogram by route, 429s, `SLOT_TAKEN`, cache hit/miss, load shed, DB pool gauges, queue depth; optional bearer token), request ids, pino logs with redaction, Razorpay calls behind a timeout + circuit breaker (create is not retried, cancel is), load shedding (503 `OVERLOADED` + Retry-After for optional reads when event-loop lag, DB pool waiters or queue backlog exceed thresholds; bookings, check-in, invoices, auth and webhooks are never shed), `captureException` hook for Sentry-style error tracking (no-op by default). Documented alerts to set up: 5xx rate > 1 %, p95 > 500 ms, `db_pool_waiting` > 0 for 1 min, `queue_depth` growing, `unprocessedWebhookEvents` > 0 for 5 min, `load_shed_total` rising.
+
+### Database for scale
+New indexes in migration 0008 (`bookings(staff_id, starts_at)`, `bookings(salon_id, status, starts_at)`, geo btree, partial indexes on active rows and public reviews, `sessions` active, invoices by status). **Discovery uses a bounding-box prefilter on `salons(lat, lng)` plus the exact haversine check, not PostGIS** (PostGIS is not available on the embedded test Postgres; moving to `geography` + GiST is the Stage C option). `daily_salon_stats` rollups feed the analytics daily series; `audit_log`/`bookings` partitioning and a read replica are not built. Migration 0010 enables RLS on every table and revokes `anon`/`authenticated` (defence in depth on Supabase); the API connects as the table owner, which bypasses RLS.
+
+### Load tests
+`loadtest/` contains k6 scripts (browse mix, hot-slot stampede of 500 users, auth burst, webhook replay, 150 req/s day-in-the-life) and `npm run loadtest:check` for the post-run "zero overlapping active bookings" invariant. **They have not been run.** Results (with the stage they were measured on) belong in this section once someone runs them: _no measurements yet_.
+
 ## Decisions (interpretations of the spec)
 
 1. **Error codes.** `error.code` is the specific code (`SLOT_TAKEN`, `HOLD_EXPIRED`, `ALREADY_CHECKED_IN`, `VERSION_MISMATCH`, `OUT_OF_WINDOW`) with HTTP 409. Generic conflicts use `CONFLICT` plus `error.reason` (`LAST_OWNER`, `CANCEL_CUTOFF`, `QR_OUTDATED`, `INVALID_STATE`, `REVIEW_EXISTS`, `ALREADY_SUBSCRIBED`, ...). `PLAN_LIMIT` is HTTP 403 with `details: {limit, max?, current?}` (object, not the usual array). Wrong-salon QR is 403 `FORBIDDEN` reason `WRONG_SALON`; a locked account is 429 `RATE_LIMITED`.
@@ -103,4 +177,8 @@ sequenceDiagram
 13. **No-show** is only allowed once the start time has passed; walk-ins may start up to 30 minutes in the past.
 14. **Extra routes beyond section 6:** `GET /invites/:code`, `DELETE /media/:id`, `GET/POST/DELETE /salons/:id/closures`, `GET /admin/plans`, `POST /admin/sales-agents`, `PATCH /admin/users/:id`, `PATCH /admin/reviews/:id`, `GET /salons/:id/bookings/:bookingId`, `GET /salons/:id/customers/:key`, staff time-off/hours routes, `GET /discover/...` helpers, `?templateId=` filter on discover (for "book this style").
 15. **Pagination** is keyset (`created_at`/`starts_at` + id, microsecond-safe via text cursors); discover uses an opaque offset cursor because of distance/rating ordering.
-16. **Test database** is PostgreSQL 18 (embedded-postgres); production targets 15+ and uses nothing newer.
+17. **Webhook is asynchronous.** `POST /webhooks/razorpay` answers `{received:true, result:"queued"|"duplicate"}` after storing the event; state changes happen a moment later in the worker. The outcome (`applied`, `stale`, `ignored`) is stored in `subscription_events.result`. Clients already poll the subscription view.
+18. **Trial payment.** `subscription.authenticated` is stored as `payment_authorized_at` / `next_charge_at` and exposed as `paymentMethodAuthorized` / `nextChargeAt` in the subscription view while `status` stays `trialing`.
+19. **Error reasons are a stable contract**, listed in `openapi.yaml` (`x-error-reasons`) and docs/CONTRACT_DECISIONS.md. New HTTP codes: `OVERLOADED` 503, `TIMEOUT` 504.
+20. **DB role.** If the API connects with a DML-only role it cannot run migrations or create the pg-boss schema; use `QUEUE_DATABASE_URL` (schema owner) for the queue or `QUEUE_ENABLED=false` (inline jobs).
+21. **Test database** is PostgreSQL 18 (embedded-postgres); production targets 15+ and uses nothing newer.

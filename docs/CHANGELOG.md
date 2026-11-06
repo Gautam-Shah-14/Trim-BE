@@ -4,6 +4,31 @@ All notable changes to Trim-BE. Format: [Keep a Changelog](https://keepachangelo
 
 ## [Unreleased]
 
+### Contract additions (all additive; existing response shapes unchanged)
+Affected clients are listed per item (C = customer app, S = salon app, D = desktop, W = website).
+- `POST /bookings/hold`, walk-in and reschedule: `409 SLOT_TAKEN` now carries `details.alternatives[{staffId,startsAt,endsAt}]` (C, S, D). Offer them for one-tap re-booking.
+- New `409 CONFLICT` reasons `HOLD_LIMIT`, `UPCOMING_LIMIT`, `DAILY_LIMIT` (max 3 active holds, 10 upcoming confirmed, 5 created per 24 h per customer) (C).
+- `429 RATE_LIMITED` with `Retry-After` and `RateLimit-*` headers; new limits for register (5/h/IP), availability (60/min/user), hold (10/min/user), check-in (120/min/salon). Back off with jitter (all clients). New `503 OVERLOADED` and `504 TIMEOUT` (all).
+- `ETag`/`Cache-Control`/`If-None-Match` (304) on public GETs: plans, hairstyles, discover, salon profile, public reviews (C, W). Do not poll availability faster than every 10 s.
+- Subscription view: `paymentMethodAuthorized`, `nextChargeAt` (set by `subscription.authenticated` while still `trialing`) (W, S, D).
+- Analytics summary: `repeatCustomerRate` alias of `repeatCustomers.rate` (D, W).
+- `GET /analytics/export.csv` returns `202 {jobId}` for ranges over 92 days; new `POST .../analytics/export`, `GET .../jobs/:jobId`, `GET .../jobs/:jobId/download` (D).
+- `POST /webhooks/razorpay` responds `result: queued|duplicate` (state is applied asynchronously) (no client impact; clients poll).
+- New `GET /admin/queue`, `GET /ready`, `GET /metrics` (W admin console may show queue health).
+- `error.reason` values are now a documented, stable list (`openapi.yaml` `x-error-reasons`, docs/CONTRACT_DECISIONS.md). `GET /me` and `register-owner` (`inviteCode`) unchanged but documented.
+- `openapi.yaml` now has full response schemas generated from `src/schemas.ts` and verified against real responses by `tests/contract.test.ts`.
+
+### Added
+- Scale layer (spec section 11): Cache / RateLimiter / JobQueue interfaces with memory implementations and optional Redis drivers (ioredis; tested only against an in-memory fake, never a live Redis), pg-boss Postgres queue with `WORKER_MODE=api|worker|both`, webhook processing as a job with a retry safety net, cache-aside with single-flight + version-key invalidation + stale-while-revalidate, per-route rate limits, slot-hoarding caps, per-staff/day advisory lock plus transaction retry for hot slots, statement/lock/idle timeouts, body and request limits, load shedding, circuit breaker around Razorpay, `/ready`, `/metrics`, `daily_salon_stats` rollup job, async CSV exports, bounding-box discovery prefilter, new indexes (migration 0008).
+- Migration 0009 (`payment_authorized_at`, `next_charge_at`) and migration 0010: idempotent RLS lockdown (RLS on every public table, `anon`/`authenticated` privileges revoked; guarded so it is a no-op for the roles on plain Postgres). Identical to what was applied by hand on the remote project; 0001-0007 were applied remotely and must never be edited.
+- `DATABASE_SSL_CA_FILE` (verified TLS with a custom CA; `certs/supabase-prod-ca-2021.crt` is the public Supabase root CA) and `DB_POOLER` (transaction-pooler mode). TLS is always verified (`rejectUnauthorized` is never false).
+- `loadtest/` k6 scripts (not run) and `npm run loadtest:check`.
+- docs/CONTRACT_DECISIONS.md.
+
+### Changed
+- `DATABASE_POOL_MAX` renamed `DB_POOL_MAX` (old name still accepted); `HOLD_SWEEPER_ENABLED` removed (the sweep is the `booking.sweep` job).
+- Fixed: vitest no longer prints "close timed out ... Vite servers" (embedded Postgres child process is released in teardown).
+
 ### Known gaps
 - `max_branches` is stored but not enforced (no multi-branch endpoint in the contract).
 - Mid-term plan change (upgrade/downgrade) is not implemented; cancel at period end and re-subscribe.
