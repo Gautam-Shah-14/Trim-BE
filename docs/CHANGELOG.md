@@ -4,6 +4,9 @@ All notable changes to Trim-BE. Format: [Keep a Changelog](https://keepachangelo
 
 ## [Unreleased]
 
+### Deployment
+- Added `render.yaml` (Render Blueprint for the `trim-api` web service: Singapore, free plan, Node 24, health check `/health`, verified TLS to Supabase, secrets as `sync: false`). Build command uses `npm ci --include=dev` so TypeScript is installed even when `NODE_ENV=production`. No contract change; no client is affected.
+
 ### QA round 3 (2026-11-07 report)
 Contract-affecting (additive): website must send `X-Trim-BFF-Key` + `X-Trim-Client-IP` (W); lockout 429 now has `Retry-After` and `details.retryAfterSec` (all clients); NUL characters are `422 VALIDATION_FAILED`; provider failure on checkout/cancel is `502 UPSTREAM_ERROR` with `reason: PAYMENT_PROVIDER` instead of 500 (W, S, D); wrong method gives `405 METHOD_NOT_ALLOWED` with `Allow` instead of 404.
 - D-01 authenticated BFF client IP (`BFF_SHARED_SECRET`); D-02 NUL rejection at the edge; D-03 lockout `Retry-After`; D-04 webhook worker polls every 0.5 s with batches of 10 and 2 workers; D-05 `/metrics` token mandatory in production (Bearer or `X-Metrics-Token`), config refuses to start otherwise; D-06 export-range test uses the salon-local date; D-08 502 `UPSTREAM_ERROR`; D-09 405; D-15 test Postgres initialised with `--encoding=UTF8`, new non-ASCII round-trip test.

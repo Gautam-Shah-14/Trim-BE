@@ -1,0 +1,65 @@
+# Render Blueprint for the Trim API.
+# Create it in the Render dashboard: New + > Blueprint > pick this repo (branch develop). Render asks for every
+# variable marked `sync: false` (secrets). Paste them from your local, gitignored Trim-BE/.env — never commit values.
+# Docs: docs/KT_Guide.md ("Deploying to Render").
+services:
+  - type: web
+    name: trim-api
+    runtime: node
+    region: singapore # closest Render region to the Supabase project in Mumbai (ap-south-1)
+    plan: free # sleeps when idle (cold start); move to a paid plan before the first paying salon
+    branch: develop
+    autoDeploy: true
+    # typescript is a devDependency: keep --include=dev so the build works even if NODE_ENV=production is set at build time
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: WORKER_MODE
+        value: both
+      - key: QUEUE_ENABLED
+        value: "true"
+      - key: CACHE_DRIVER
+        value: memory # single instance; use redis (REDIS_URL) before running more than one instance
+      - key: RATE_LIMIT_DRIVER
+        value: memory
+      - key: DB_POOL_MAX
+        value: "5" # the Supabase session pooler has few client slots
+      - key: DATABASE_SSL
+        value: "true"
+      - key: DATABASE_SSL_CA_FILE
+        value: certs/supabase-prod-ca-2021.crt
+      - key: CORS_ORIGINS
+        value: https://trim.tokenburners.co.in
+      - key: WEBSITE_URL
+        value: https://trim.tokenburners.co.in
+      - key: METRICS_ENABLED
+        value: "true" # requires METRICS_TOKEN in production
+      # QA run only: sign-up/contact limits raised so the end-to-end suite can create many users. LOWER AFTER QA (defaults 5/hour).
+      - key: RATE_LIMIT_REGISTER_PER_HOUR
+        value: "300"
+      - key: RATE_LIMIT_CONTACT_PER_HOUR
+        value: "300"
+      # ---- secrets: Render prompts for these when the Blueprint is created (copy from Trim-BE/.env) ----
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: QR_SECRET
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: BFF_SHARED_SECRET
+        sync: false
+      - key: METRICS_TOKEN
+        sync: false

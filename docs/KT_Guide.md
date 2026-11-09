@@ -63,10 +63,13 @@ Add it to `PERMISSIONS` and the default role lists in `src/lib/permissions.ts`. 
 4. Try it: the owner portal (or `POST /v1/salons/:id/subscription/checkout`) returns `razorpaySubscriptionId` + `keyId`; pay with a Razorpay test card/UPI; watch `subscription_events` and `GET /subscription` flip to `active`. Receipts land in `subscription_receipts` (plain receipts, never "tax invoices").
 5. Changing a price: `PATCH /v1/admin/plans/:code` clears the stored Razorpay plan id; re-run the script; existing subscribers stay on their old plan.
 
-## Runbook: deploy on Render (later, needs owner approval)
+## Runbook: deploy on Render
+Fast path: the repo has a Blueprint, `render.yaml`. In the Render dashboard choose New + > Blueprint, pick this repo (branch `develop`), and paste the secret values Render asks for (copy them from your local gitignored `.env`; never commit them): `DATABASE_URL`, `JWT_SECRET`, `QR_SECRET`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `BFF_SHARED_SECRET` (must equal the website's), `METRICS_TOKEN`. Non-secret settings (region Singapore, free plan, Node 24, health check `/health`, `TRUST_PROXY=1`, `DB_POOL_MAX=5`, verified TLS to Supabase, CORS and website URLs) are already in the file. The build command keeps `--include=dev` because TypeScript is a dev dependency. `RATE_LIMIT_REGISTER_PER_HOUR` / `RATE_LIMIT_CONTACT_PER_HOUR` are set to 300 for the QA run only: lower them (defaults 5) afterwards. If `DATABASE_URL` is the Supabase session pooler (port 5432) the queue (`pg-boss`) reuses it; with the transaction pooler (6543) set `DB_POOLER=true` and give `QUEUE_DATABASE_URL` a session-pooler or direct string.
+
+Manual path (same result):
 1. New Postgres (or keep Supabase with its connection string and `DATABASE_SSL=true`). Run `npm run migrate && npm run seed` once against it.
-2. New Web Service from the repo: build `npm ci && npm run build`, start `npm start`, health check path `/health`, Node 24.
-3. Environment: everything in `.env.example` (production requires Razorpay keys and `CORS_ORIGINS`); `TRUST_PROXY=1`.
+2. New Web Service from the repo: build `npm ci --include=dev && npm run build`, start `npm start`, health check path `/health`, Node 24.
+3. Environment: everything in `.env.example` (production requires Razorpay keys, `METRICS_TOKEN` and `CORS_ORIGINS`); `TRUST_PROXY=1`.
 4. Point the Razorpay webhook at the Render URL. Add repo secrets `API_BASE_URL` and `DATABASE_URL` for `keepalive.yml`, and `DATABASE_URL` (+ optional `BACKUP_PASSPHRASE`) for `backup.yml`.
 5. Free-tier caveats: the service sleeps (keepalive pings daily; the first request after idle is slow) and free Supabase has no backups (the nightly artifact is the only one). Upgrade when the first salon pays.
 6. Run migrations as a deploy step before switching traffic. Rollbacks are done with a new forward migration.
