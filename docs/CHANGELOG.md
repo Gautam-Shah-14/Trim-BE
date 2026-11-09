@@ -5,7 +5,7 @@ All notable changes to Trim-BE. Format: [Keep a Changelog](https://keepachangelo
 ## [Unreleased]
 
 ### Deployment
-- Added `render.yaml` (Render Blueprint for the `trim-api` web service: Singapore, free plan, Node 24, health check `/health`, verified TLS to Supabase, secrets as `sync: false`). Build command uses `npm ci --include=dev` so TypeScript is installed even when `NODE_ENV=production`. No contract change; no client is affected.
+- Added `render.yaml` (Render Blueprint for the `trim-tokenburners-api` web service (the name `trim-api` is taken on onrender.com by another account): Singapore, free plan, Node 24, health check `/health`, verified TLS to Supabase, secrets as `sync: false`). Build command uses `npm ci --include=dev` so TypeScript is installed even when `NODE_ENV=production`. No contract change; no client is affected.
 
 ### QA round 3 (2026-11-07 report)
 Contract-affecting (additive): website must send `X-Trim-BFF-Key` + `X-Trim-Client-IP` (W); lockout 429 now has `Retry-After` and `details.retryAfterSec` (all clients); NUL characters are `422 VALIDATION_FAILED`; provider failure on checkout/cancel is `502 UPSTREAM_ERROR` with `reason: PAYMENT_PROVIDER` instead of 500 (W, S, D); wrong method gives `405 METHOD_NOT_ALLOWED` with `Allow` instead of 404.

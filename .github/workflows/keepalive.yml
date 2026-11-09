@@ -1,5 +1,5 @@
 # Keeps the free tiers awake (Render sleeps, Supabase pauses after ~1 week of inactivity).
-# Needs repository secrets: API_BASE_URL (e.g. https://trim-api.onrender.com) and DATABASE_URL.
+# Needs repository secrets: API_BASE_URL (e.g. https://trim-tokenburners-api.onrender.com) and DATABASE_URL.
 # Only runs once the repo is pushed to GitHub. Remove the DB step if you do not want Actions to hold the DB URL.
 name: keepalive
 on:

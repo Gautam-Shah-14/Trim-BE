@@ -4,7 +4,7 @@
 # Docs: docs/KT_Guide.md ("Deploying to Render").
 services:
   - type: web
-    name: trim-api
+    name: trim-tokenburners-api # unique: the bare name trim-api is already taken on onrender.com (by another account)
     runtime: node
     region: singapore # closest Render region to the Supabase project in Mumbai (ap-south-1)
     plan: free # sleeps when idle (cold start); move to a paid plan before the first paying salon
