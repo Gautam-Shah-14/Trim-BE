@@ -82,6 +82,8 @@ async function retryTx<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+const inflightHolds = new Map<string, Promise<boolean>>();
+
 export function register(api: Api) {
   const { deps } = api;
   const qrSecret = deps.config.qrSecret;
@@ -118,49 +120,88 @@ export function register(api: Api) {
       if (deps.cache.driver.driver === 'redis') proceed = await deps.cache.driver.setNx(fastKey, 5000).catch(() => true);
       let ok = false;
       try {
-        const id = await withAlternatives(b.salonId, b.staffId, b.serviceIds, b.startsAt.getTime(), async () => {
+        const startMs = b.startsAt.getTime();
+        const id = await withAlternatives(b.salonId, b.staffId, b.serviceIds, startMs, async () => {
           if (!proceed) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
-          return retryTx(() =>
-            withTx(deps.pool, async (c) => {
-              const salon = await loadSalonEnt(c, b.salonId);
-              if (!salon || salon.status !== 'approved' || !salon.ent.discoverable) throw E.notFound('Salon');
-              if (salon.ent.readOnly) throw E.inactive('This salon is not accepting bookings right now');
-              // serialise this customer's holds so the hoarding caps are exact under parallel requests
-              await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`cust:${userId}`]);
-              const caps = deps.config.caps;
-              const cnt = await c.query<{ held: number; upcoming: number; today: number }>(
-                `SELECT count(*) FILTER (WHERE status = 'held' AND hold_expires_at > now())::int AS held,
-                        count(*) FILTER (WHERE status = 'confirmed' AND starts_at > now())::int AS upcoming,
-                        count(*) FILTER (WHERE created_at > now() - interval '24 hours' AND status <> 'expired')::int AS today
-                   FROM bookings WHERE customer_id = $1`,
-                [userId],
-              );
-              const n = cnt.rows[0]!;
-              if (n.held >= caps.maxHeld) throw new AppError('CONFLICT', `You can hold at most ${caps.maxHeld} slots at a time; confirm or cancel one first`, { limit: caps.maxHeld, current: n.held }, 'HOLD_LIMIT');
-              if (n.upcoming >= caps.maxUpcoming) throw new AppError('CONFLICT', `You can have at most ${caps.maxUpcoming} upcoming bookings`, { limit: caps.maxUpcoming, current: n.upcoming }, 'UPCOMING_LIMIT');
-              if (n.today >= caps.maxPerDay) throw new AppError('CONFLICT', `You can create at most ${caps.maxPerDay} bookings per day`, { limit: caps.maxPerDay, current: n.today }, 'DAILY_LIMIT');
-              await lockStaffDay(c, b.staffId, b.startsAt.getTime());
-              await sweepExpiredHolds(c, b.staffId);
-              const plan = await planBooking(c, b.salonId, b.staffId, b.serviceIds);
-              const startMs = b.startsAt.getTime();
-              const endMs = startMs + plan.totalDurationMin * 60_000;
-              await assertWithinWorkingTime(c, b.salonId, salon.timezone, b.staffId, startMs, endMs);
-              const u = await c.query<{ full_name: string; phone_e164: string | null }>('SELECT full_name, phone_e164 FROM users WHERE id = $1', [userId]);
-              try {
-                const ins = await c.query<{ id: string }>(
-                  `INSERT INTO bookings (salon_id, customer_id, customer_name, customer_phone, staff_id, source, status, starts_at, ends_at,
-                                         total_duration_min, total_price_paise, hold_expires_at, idempotency_key)
-                   VALUES ($1,$2,$3,$4,$5,'app','held',$6,$7,$8,$9, now() + make_interval(mins => $10), $11) RETURNING id`,
-                  [b.salonId, userId, u.rows[0]!.full_name, u.rows[0]!.phone_e164, b.staffId, new Date(startMs), new Date(endMs), plan.totalDurationMin, plan.totalPricePaise, HOLD_MINUTES, key],
+          // Identical staff+start requests in this process: one leader does the work, the others wait for its outcome (no DB use).
+          // If the leader won, the followers get SLOT_TAKEN at once; if it failed, the next follower takes over. Purely an optimisation.
+          const flightKey = `${b.staffId}:${startMs}`;
+          for (;;) {
+            const peer = inflightHolds.get(flightKey);
+            if (!peer) break;
+            if (await peer) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
+          }
+          let settle!: (won: boolean) => void;
+          const flight = new Promise<boolean>((r) => (settle = r));
+          inflightHolds.set(flightKey, flight);
+          let won = false;
+          try {
+            // 1. cheap fail-fast: is the requested start already inside an active booking of this staff member? (1 round trip, no transaction)
+            // (the same statement also flips this staff member's expired holds, FOR UPDATE SKIP LOCKED, so they cannot trip the constraint)
+            const busy = await deps.pool.query<{ busy: boolean }>(
+              `WITH swept AS (
+                 UPDATE bookings SET status = 'expired', version = version + 1, updated_at = now()
+                  WHERE id IN (SELECT id FROM bookings WHERE status = 'held' AND hold_expires_at < now() AND staff_id = $1 ORDER BY id FOR UPDATE SKIP LOCKED)
+                  RETURNING id)
+               SELECT EXISTS (SELECT 1 FROM bookings WHERE staff_id = $1 AND status IN ('held','confirmed','checked_in') AND during @> $2::timestamptz
+                                AND NOT (status = 'held' AND hold_expires_at < now())) AS busy`,
+              [b.staffId, new Date(startMs)],
+            );
+            if (busy.rows[0]!.busy) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
+            // 2. everything that does not need a lock or a transaction, on short-lived pooled connections
+            const salon = await loadSalonEnt(deps.pool, b.salonId);
+            if (!salon || salon.status !== 'approved' || !salon.ent.discoverable) throw E.notFound('Salon');
+            if (salon.ent.readOnly) throw E.inactive('This salon is not accepting bookings right now');
+            const plan = await planBooking(deps.pool, b.salonId, b.staffId, b.serviceIds);
+            const endMs = startMs + plan.totalDurationMin * 60_000;
+            await assertWithinWorkingTime(deps.pool, b.salonId, salon.timezone, b.staffId, startMs, endMs);
+            // 3. critical section: only the caps check and ONE statement that inserts the booking and its items.
+            //    The exclusion constraint is the authority; no pooled connection waits on an advisory lock for the slot.
+            const created = await retryTx(() =>
+              withTx(deps.pool, async (c) => {
+                // serialise this customer's holds so the hoarding caps are exact under parallel requests
+                await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`cust:${userId}`]);
+                const caps = deps.config.caps;
+                const cnt = await c.query<{ held: number; upcoming: number; today: number; full_name: string; phone: string | null }>(
+                  `SELECT count(*) FILTER (WHERE status = 'held' AND hold_expires_at > now())::int AS held,
+                          count(*) FILTER (WHERE status = 'confirmed' AND starts_at > now())::int AS upcoming,
+                          count(*) FILTER (WHERE created_at > now() - interval '24 hours' AND status <> 'expired')::int AS today,
+                          (SELECT full_name FROM users WHERE id = $1) AS full_name, (SELECT phone_e164 FROM users WHERE id = $1) AS phone
+                     FROM bookings WHERE customer_id = $1`,
+                  [userId],
                 );
-                await insertItems(c, ins.rows[0]!.id, plan.items);
-                return ins.rows[0]!.id;
-              } catch (err) {
-                if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
-                throw err;
-              }
-            }),
-          );
+                const n = cnt.rows[0]!;
+                if (n.held >= caps.maxHeld) throw new AppError('CONFLICT', `You can hold at most ${caps.maxHeld} slots at a time; confirm or cancel one first`, { limit: caps.maxHeld, current: n.held }, 'HOLD_LIMIT');
+                if (n.upcoming >= caps.maxUpcoming) throw new AppError('CONFLICT', `You can have at most ${caps.maxUpcoming} upcoming bookings`, { limit: caps.maxUpcoming, current: n.upcoming }, 'UPCOMING_LIMIT');
+                if (n.today >= caps.maxPerDay) throw new AppError('CONFLICT', `You can create at most ${caps.maxPerDay} bookings per day`, { limit: caps.maxPerDay, current: n.today }, 'DAILY_LIMIT');
+                try {
+                  const ins = await c.query<{ booking_id: string }>(
+                    `WITH b AS (
+                       INSERT INTO bookings (salon_id, customer_id, customer_name, customer_phone, staff_id, source, status, starts_at, ends_at,
+                                             total_duration_min, total_price_paise, hold_expires_at, idempotency_key)
+                       VALUES ($1,$2,$3,$4,$5,'app','held',$6,$7,$8,$9, now() + make_interval(mins => $10), $11) RETURNING id)
+                     INSERT INTO booking_items (booking_id, service_id, name_snapshot, duration_min, price_paise_snapshot, position)
+                     SELECT b.id, i.sid, i.nm, i.dur, i.price, (i.pos - 1)::int
+                       FROM b, unnest($12::uuid[], $13::text[], $14::int[], $15::int[]) WITH ORDINALITY AS i(sid, nm, dur, price, pos)
+                     RETURNING booking_id`,
+                    [
+                      b.salonId, userId, n.full_name, n.phone, b.staffId, new Date(startMs), new Date(endMs), plan.totalDurationMin, plan.totalPricePaise,
+                      HOLD_MINUTES, key, plan.items.map((i) => i.serviceId), plan.items.map((i) => i.name), plan.items.map((i) => i.durationMin), plan.items.map((i) => i.pricePaise),
+                    ],
+                  );
+                  return ins.rows[0]!.booking_id;
+                } catch (err) {
+                  if (isPgError(err, '23P01')) throw new AppError('SLOT_TAKEN', 'That time was just taken, please pick another slot');
+                  throw err;
+                }
+              }),
+            );
+            won = true;
+            return created;
+          } finally {
+            settle(won);
+            if (inflightHolds.get(flightKey) === flight) inflightHolds.delete(flightKey);
+          }
         });
         ok = true;
         const row = (await fetchBooking(deps.pool, id))!;

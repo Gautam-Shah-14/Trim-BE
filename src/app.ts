@@ -239,6 +239,14 @@ const errorHandler = (log: Logger, deps: () => Deps): ErrorRequestHandler => (er
     res.status(422).json({ error: { code: 'VALIDATION_FAILED', message: 'A value has an invalid format' } });
     return;
   }
+  // DB saturation is load, not a bug: pool-acquire timeout, statement timeout, lock timeout => 503 + Retry-After (never 500)
+  const msg = String((err as { message?: string }).message ?? '');
+  if (e.code === '57014' || e.code === '55P03' || /timeout exceeded when trying to connect|Query read timeout/i.test(msg)) {
+    log.warn({ err: msg, reqId: req.id }, 'database saturated');
+    res.setHeader('Retry-After', '2');
+    res.status(503).json({ error: { code: 'OVERLOADED', message: 'The service is busy, please retry shortly' } });
+    return;
+  }
   log.error({ err, reqId: req.id }, 'unhandled error');
   deps().captureException(err, { reqId: req.id, path: req.path });
   res.status(500).json({ error: { code: 'INTERNAL', message: 'Something went wrong. Quote request id ' + req.id } });

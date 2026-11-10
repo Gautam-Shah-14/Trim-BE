@@ -100,22 +100,29 @@ export async function planBooking(db: Queryable, salonId: string, staffId: strin
 export async function assertWithinWorkingTime(db: Queryable, salonId: string, tz: string, staffId: string, startMs: number, endMs: number): Promise<void> {
   const date = localDateOf(startMs, tz);
   const wd = weekdayOf(date);
-  const h = await db.query<{ opens: string; closes: string; is_closed: boolean }>('SELECT opens, closes, is_closed FROM salon_hours WHERE salon_id = $1 AND weekday = $2', [salonId, wd]);
-  const closure = await db.query('SELECT 1 FROM salon_closures WHERE salon_id = $1 AND date = $2::date', [salonId, date]);
-  const sh = await db.query<{ start_time: string; end_time: string }>('SELECT start_time, end_time FROM staff_hours WHERE staff_id = $1 AND weekday = $2', [staffId, wd]);
-  const hr = h.rows[0];
+  // one round trip for all four lookups (salon hours, closure, staff hours, time off)
+  const q = await db.query<{ opens: string | null; closes: string | null; is_closed: boolean | null; closed: boolean; start_time: string | null; end_time: string | null; off: boolean }>(
+    `SELECT h.opens, h.closes, h.is_closed,
+            EXISTS (SELECT 1 FROM salon_closures WHERE salon_id = $1 AND date = $2::date) AS closed,
+            sh.start_time, sh.end_time,
+            EXISTS (SELECT 1 FROM staff_time_off WHERE staff_id = $3 AND during && tstzrange($5, $6, '[)')) AS off
+       FROM (SELECT 1) x
+       LEFT JOIN salon_hours h ON h.salon_id = $1 AND h.weekday = $4
+       LEFT JOIN staff_hours sh ON sh.staff_id = $3 AND sh.weekday = $4`,
+    [salonId, date, staffId, wd, new Date(startMs), new Date(endMs)],
+  );
+  const r = q.rows[0]!;
   const windows = workingWindows({
     date,
     tz,
-    salonHours: hr ? { opens: hr.opens, closes: hr.closes, isClosed: hr.is_closed } : null,
-    closed: (closure.rowCount ?? 0) > 0,
-    staffHours: sh.rows[0] ? { start: sh.rows[0].start_time, end: sh.rows[0].end_time } : null,
+    salonHours: r.opens !== null ? { opens: r.opens, closes: r.closes!, isClosed: !!r.is_closed } : null,
+    closed: r.closed,
+    staffHours: r.start_time !== null ? { start: r.start_time, end: r.end_time! } : null,
   });
   if (!contains(windows, { start: startMs, end: endMs })) {
     throw E.validation('The requested time is outside working hours', [{ field: 'startsAt', issue: 'outside salon/staff working hours or on a closure day' }]);
   }
-  const off = await db.query('SELECT 1 FROM staff_time_off WHERE staff_id = $1 AND during && tstzrange($2, $3, \'[)\')', [staffId, new Date(startMs), new Date(endMs)]);
-  if (off.rowCount) throw new AppError('SLOT_TAKEN', 'The staff member is not available at that time');
+  if (r.off) throw new AppError('SLOT_TAKEN', 'The staff member is not available at that time');
 }
 
 export const BOOKING_SELECT = `

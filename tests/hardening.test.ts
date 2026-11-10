@@ -219,3 +219,34 @@ describe('UTF-8 end to end (embedded Postgres is initialised with UTF8)', () => 
     expect(svc.body.data.name).toBe('दाढ़ी ट्रिम ✂️');
   });
 });
+
+describe('round 4: hot slot with a tiny pool, and DB saturation is a 503', () => {
+  it('30 parallel holds on one slot with a pool of 3: one 201, 29 x 409 SLOT_TAKEN with alternatives, no 5xx', async () => {
+    const ctx = await boot({ DB_POOL_MAX: '3' });
+    const o = await makeOwner(ctx);
+    const customers = await Promise.all(Array.from({ length: 30 }, () => makeCustomer(ctx)));
+    const startsAt = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 11) + '05:00:00.000Z'; // 10:30 IST, inside default hours
+    const t0 = Date.now();
+    const rs = await Promise.all(customers.map((c) => call(ctx, 'POST', '/v1/bookings/hold', { token: c.token, body: { salonId: o.salonId, staffId: o.staffId, serviceIds: [o.serviceId], startsAt } })));
+    expect(rs.filter((r) => r.status === 201)).toHaveLength(1);
+    const losers = rs.filter((r) => r.status !== 201);
+    expect(losers.every((r) => r.status === 409 && r.body.error.code === 'SLOT_TAKEN')).toBe(true);
+    expect(losers[0]!.body.error.details.alternatives.length).toBeGreaterThan(0);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    const { findOverlaps } = await import('../src/lib/invariants.js');
+    expect(await findOverlaps(ctx.pool)).toEqual([]);
+  }, 60_000);
+
+  it('a pool-acquire / statement timeout surfaces as 503 OVERLOADED with Retry-After, never 500', async () => {
+    const ctx = await boot();
+    const orig = ctx.pool.query.bind(ctx.pool);
+    (ctx.pool as any).query = async () => {
+      throw new Error('timeout exceeded when trying to connect');
+    };
+    const r = await call(ctx, 'GET', '/v1/plans');
+    (ctx.pool as any).query = orig;
+    expect(r.status).toBe(503);
+    expect(r.body.error.code).toBe('OVERLOADED');
+    expect(r.headers.get('retry-after')).toBeTruthy();
+  });
+});

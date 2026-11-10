@@ -72,6 +72,18 @@ export async function computeAvailability(
 }
 
 /** Next free start times for the same staff + services after `afterMs` (spec 11.5.2: details.alternatives). */
+const recent = new Map<string, { at: number; p: Promise<Slot[]> }>();
+/** concurrent losers of one stampede share one availability computation per (salon, staff, services, date) for ~1.5 s */
+function coalesced(key: string, load: () => Promise<Slot[]>): Promise<Slot[]> {
+  const hit = recent.get(key);
+  if (hit && Date.now() - hit.at < 1500) return hit.p;
+  const p = load();
+  recent.set(key, { at: Date.now(), p });
+  p.catch(() => recent.delete(key));
+  if (recent.size > 200) for (const [k, v] of recent) if (Date.now() - v.at > 1500) recent.delete(k);
+  return p;
+}
+
 export async function findAlternatives(
   db: Queryable,
   salon: { id: string; timezone: string },
@@ -86,7 +98,7 @@ export async function findAlternatives(
     let date = localDateOf(afterMs, salon.timezone);
     const found: Slot[] = [];
     for (let i = 0; i < 4 && date <= last && found.length < max; i++, date = addDays(date, 1)) {
-      const slots = await computeAvailability(db, salon, serviceIds, staffId, date);
+      const slots = await coalesced(`${salon.id}:${staffId}:${[...serviceIds].sort().join(',')}:${date}`, () => computeAvailability(db, salon, serviceIds, staffId, date));
       for (const s of slots) if (Date.parse(s.startsAt) > afterMs && found.length < max) found.push(s);
     }
     return found;
