@@ -4,6 +4,7 @@ import { E } from '../errors.js';
 import { isPgError, withTx } from '../db.js';
 import { auditReq } from '../lib/audit.js';
 import { recomputeRating } from '../lib/booking.js';
+import { activeUsers, istDay } from '../lib/activity.js';
 import { planDto, hairstyleDto } from './public.js';
 import { salonDto } from './salon.js';
 
@@ -225,10 +226,12 @@ export function register(api: Api) {
              (SELECT COALESCE(sum(amount_paise),0)::bigint FROM subscription_receipts WHERE issued_at > now() - interval '30 days') AS receipts_30d_paise,
              (SELECT count(*)::int FROM leads) AS leads`);
     const x = r.rows[0];
+    const active = await activeUsers(deps.pool, istDay(Date.now()));
     send(res, {
       customers: x.customers, salons: { total: x.salons, pending: x.salons_pending, approved: x.salons_approved },
       subscriptions: { active: x.subs_active, trialing: x.subs_trialing, troubled: x.subs_troubled },
       bookingsLast30Days: x.bookings_30d, newContactMessages: x.contact_new, subscriptionReceiptsLast30DaysPaise: x.receipts_30d_paise, leads: x.leads,
+      activeUsers: active,
     });
   });
 

@@ -5,6 +5,7 @@ import { E } from '../errors.js';
 import { entitlements, type PlanRow, type SubscriptionRow } from '../lib/entitlements.js';
 import { ALL_PERMISSIONS, type Permission } from '../lib/permissions.js';
 import { verifyAccess } from '../lib/security.js';
+import { recordActivity } from '../lib/activity.js';
 import type { AuthInfo, Deps, SalonCtx } from './types.js';
 
 export type AuthKind = 'none' | 'user' | 'customer' | 'admin' | 'sales' | 'salon';
@@ -74,6 +75,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
     return r.rows[0] ?? null;
   });
   if (!row || !row.is_active) throw E.unauth('Session is no longer valid');
+  recordActivity(deps.pool, deps.log, claims.sub, row.platform_role); // fire-and-forget DAU/WAU/MAU
   req.auth = { userId: claims.sub, role: row.platform_role, sessionId: claims.sid };
   next();
 };

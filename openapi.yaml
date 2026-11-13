@@ -3075,6 +3075,98 @@ components:
           type: integer
           minimum: -9007199254740991
           maximum: 9007199254740991
+        activeUsers:
+          type: object
+          properties:
+            asOf:
+              type: string
+              description: IST date YYYY-MM-DD
+            dau:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            wau:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+              description: distinct users in the 7 IST days ending asOf
+            mau:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+              description: distinct users in the 30 IST days ending asOf
+            byRole:
+              type: object
+              properties:
+                customer:
+                  type: object
+                  properties:
+                    dau:
+                      type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    wau:
+                      type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    mau:
+                      type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                  required:
+                    - dau
+                    - wau
+                    - mau
+                  additionalProperties: false
+                salon_user:
+                  type: object
+                  properties:
+                    dau:
+                      type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    wau:
+                      type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                    mau:
+                      type: integer
+                      minimum: -9007199254740991
+                      maximum: 9007199254740991
+                  required:
+                    - dau
+                    - wau
+                    - mau
+                  additionalProperties: false
+              required:
+                - customer
+                - salon_user
+              additionalProperties: false
+            series:
+              type: array
+              items:
+                type: object
+                properties:
+                  day:
+                    type: string
+                  dau:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                required:
+                  - day
+                  - dau
+                additionalProperties: false
+              description: 30 IST days ending asOf, oldest first, missing days are 0
+          required:
+            - asOf
+            - dau
+            - wau
+            - mau
+            - byRole
+            - series
+          additionalProperties: false
+          description: activity = authenticated API usage, at most one record per user per IST day
       required:
         - customers
         - salons
@@ -3083,6 +3175,7 @@ components:
         - newContactMessages
         - subscriptionReceiptsLast30DaysPaise
         - leads
+        - activeUsers
       additionalProperties: false
     AuditEntry:
       type: object

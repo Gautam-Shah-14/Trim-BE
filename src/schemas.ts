@@ -134,6 +134,11 @@ const AdminUser = s({ id, fullName: str, email: nstr, phone: nstr, role: str, is
 const AdminStats = s({
   customers: int, salons: s({ total: int, pending: int, approved: int }), subscriptions: s({ active: int, trialing: int, troubled: int }),
   bookingsLast30Days: int, newContactMessages: int, subscriptionReceiptsLast30DaysPaise: int, leads: int,
+  activeUsers: s({
+    asOf: str.describe('IST date YYYY-MM-DD'), dau: int, wau: int.describe('distinct users in the 7 IST days ending asOf'), mau: int.describe('distinct users in the 30 IST days ending asOf'),
+    byRole: s({ customer: s({ dau: int, wau: int, mau: int }), salon_user: s({ dau: int, wau: int, mau: int }) }),
+    series: arr(s({ day: str, dau: int })).describe('30 IST days ending asOf, oldest first, missing days are 0'),
+  }).describe('activity = authenticated API usage, at most one record per user per IST day'),
 });
 const AuditEntry = s({ id: int, actorUserId: nid, salonId: nid, action: str, entity: nstr, entityId: nstr, meta: z.record(str, z.unknown()), ip: nstr, createdAt: ts });
 const ContactMessage = s({ id, name: str, email: str, phone: nstr, salonName: nstr, message: str, status: z.enum(['new', 'handled']), assignedTo: nid, createdAt: ts });

@@ -157,6 +157,10 @@ The API trusts `TRUST_PROXY` hops for direct clients. The website BFF authentica
 ### Input hygiene
 `src/http/sanitize.ts` rejects NUL characters in URL, query, path params and every string in JSON bodies with 422 before any handler runs (Postgres text cannot store them). Wrong-method requests on a known path answer 405 with `Allow`. Provider failures map to 502 `UPSTREAM_ERROR`. The webhook worker polls every 0.5 s in batches of 10 with 2 local workers (20 events drain in well under 10 s).
 
+### Active users
+The auth middleware calls `recordActivity` (src/lib/activity.ts) on every authenticated request: an in-process set (userId:IST-day, cleared at the day change) lets at most one `INSERT ... ON CONFLICT DO NOTHING` per user per day through, and it is not awaited (errors are logged at debug).
+`GET /admin/stats` computes DAU (asOf), WAU (7 IST days incl. asOf), MAU (30) and a gap-filled 30-day series from `user_activity_days` (indexed by day; 400-day retention).
+
 ### Resilience and observability
 Graceful shutdown (stop accepting, drain queue, close pools), `/health` liveness, `/ready` (DB gates readiness; queue and cache are reported but degrade gracefully), `/metrics` (token required in production: Bearer or X-Metrics-Token; Prometheus text: request counts + latency histogram by route, 429s, `SLOT_TAKEN`, cache hit/miss, load shed, DB pool gauges, queue depth; optional bearer token), request ids, pino logs with redaction, Razorpay calls behind a timeout + circuit breaker (create is not retried, cancel is), load shedding (503 `OVERLOADED` + Retry-After for optional reads when event-loop lag, DB pool waiters or queue backlog exceed thresholds; bookings, check-in, invoices, auth and webhooks are never shed), `captureException` hook for Sentry-style error tracking (no-op by default). Documented alerts to set up: 5xx rate > 1 %, p95 > 500 ms, `db_pool_waiting` > 0 for 1 min, `queue_depth` growing, `unprocessedWebhookEvents` > 0 for 5 min, `load_shed_total` rising.
 

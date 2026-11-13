@@ -4,6 +4,9 @@ All notable changes to Trim-BE. Format: [Keep a Changelog](https://keepachangelo
 
 ## [Unreleased]
 
+### Active users (DAU/WAU/MAU) for the admin dashboard
+`GET /v1/admin/stats` gains `activeUsers {asOf, dau, wau, mau, byRole{customer, salon_user}, series[30]{day, dau}}` (additive; website admin console). Activity = authenticated API usage, recorded at most once per user per IST day in the new `user_activity_days` table (migration 0011, RLS + trim_api policy like 0010), fire-and-forget so it never slows or fails a request; rows older than 400 days are deleted by the audit-retention job. No push notifications involved.
+
 ### Hot-slot latency fix (round 4)
 Behind a slow database link (Render Singapore -> Supabase Mumbai, pool of 5) 30 parallel holds on one slot returned 1 x 201 and 29 x 504, and overlapping starts produced 500s. Cause: every contender held a pooled connection while queueing on the staff/day advisory lock, then ran the full ~17-round-trip path (the losers too, plus a ~40-round-trip alternatives computation each), so the pool starved; pool-acquire timeouts were unmapped (500). Fix: reads moved out of the transaction, in-process single flight for identical staff+start, one-statement fail-fast pre-check + stale-hold sweep, one-statement booking+items insert, merged working-hours lookup, coalesced alternatives, and pool/statement/lock timeouts now answer 503 `OVERLOADED` + `Retry-After`. The exclusion constraint is unchanged and remains the only authority. No contract change except that saturation is now 503 instead of 500. Clients: treat 503 like 429 (back off using Retry-After).
 

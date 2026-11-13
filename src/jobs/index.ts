@@ -35,6 +35,7 @@ export function registerJobs(deps: Deps) {
     await pool.query("DELETE FROM audit_log WHERE created_at < now() - interval '400 days'");
     await pool.query("DELETE FROM idempotency_keys WHERE created_at < now() - interval '48 hours'");
     await pool.query("DELETE FROM export_jobs WHERE created_at < now() - interval '14 days'");
+    await pool.query("DELETE FROM user_activity_days WHERE day < current_date - 400");
   });
 
   queue.register('export.run', async ({ jobId }: { jobId: string }) => {
