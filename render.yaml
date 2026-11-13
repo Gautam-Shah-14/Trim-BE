@@ -46,6 +46,17 @@ services:
         value: "300"
       - key: RATE_LIMIT_CONTACT_PER_HOUR
         value: "300"
+      # founding-salon waitlist + Brevo SMTP (mail stays disabled until SMTP_USER/SMTP_PASS/MAIL_FROM are set)
+      - key: WAITLIST_OPEN
+        value: "true"
+      - key: RATE_LIMIT_WAITLIST_PER_HOUR
+        value: "10"
+      - key: SMTP_HOST
+        value: smtp-relay.brevo.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURE
+        value: "false"
       # ---- secrets: Render prompts for these when the Blueprint is created (copy from Trim-BE/.env) ----
       - key: DATABASE_URL
         sync: false
@@ -62,4 +73,12 @@ services:
       - key: BFF_SHARED_SECRET
         sync: false
       - key: METRICS_TOKEN
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: WAITLIST_NOTIFY_TO
         sync: false

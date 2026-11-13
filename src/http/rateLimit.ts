@@ -63,7 +63,9 @@ export const loginLimiter = (limit: number) =>
   });
 
 export const contactLimiter = (perHour: number) => limiter({ name: 'contact', limit: perHour, windowMs: HOUR, message: 'Too many messages, try again later' });
-export const registerLimiter = (name: string, perHour: () => number) => limiter({ name, limit: perHour, windowMs: HOUR, message: 'Too many sign-ups from this address, try again later' });
+/** founding-salon waitlist sign-ups per client IP (BFF-authenticated X-Trim-Client-IP when present) per hour */
+export const waitlistLimiter = (perHour: number) => limiter({ name: 'waitlist', limit: perHour, windowMs: HOUR, message: 'Too many sign-ups from this address, try again later' });
+export const registerLimiter =(name: string, perHour: () => number) => limiter({ name, limit: perHour, windowMs: HOUR, message: 'Too many sign-ups from this address, try again later' });
 export const refreshLimiter = (perMin: number) => limiter({ name: 'refresh', limit: perMin, windowMs: MIN });
 /** per signed-in user (or IP when anonymous) */
 export const userLimiter = (name: string, perMin: number) => limiter({ name, limit: perMin, windowMs: MIN, key: actorKey });

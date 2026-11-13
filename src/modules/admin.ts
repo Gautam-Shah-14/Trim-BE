@@ -224,13 +224,16 @@ export function register(api: Api) {
              (SELECT count(*)::int FROM bookings WHERE created_at > now() - interval '30 days' AND status NOT IN ('held','expired')) AS bookings_30d,
              (SELECT count(*)::int FROM contact_messages WHERE status = 'new') AS contact_new,
              (SELECT COALESCE(sum(amount_paise),0)::bigint FROM subscription_receipts WHERE issued_at > now() - interval '30 days') AS receipts_30d_paise,
-             (SELECT count(*)::int FROM leads) AS leads`);
+             (SELECT count(*)::int FROM leads) AS leads,
+             (SELECT count(*)::int FROM waitlist_signups) AS waitlist_total,
+             (SELECT count(*)::int FROM waitlist_signups WHERE created_at > now() - interval '7 days') AS waitlist_7d`);
     const x = r.rows[0];
     const active = await activeUsers(deps.pool, istDay(Date.now()));
     send(res, {
       customers: x.customers, salons: { total: x.salons, pending: x.salons_pending, approved: x.salons_approved },
       subscriptions: { active: x.subs_active, trialing: x.subs_trialing, troubled: x.subs_troubled },
       bookingsLast30Days: x.bookings_30d, newContactMessages: x.contact_new, subscriptionReceiptsLast30DaysPaise: x.receipts_30d_paise, leads: x.leads,
+      waitlist: { total: x.waitlist_total, last7Days: x.waitlist_7d },
       activeUsers: active,
     });
   });

@@ -33,6 +33,7 @@ info:
     NAME_TAKEN: 409 CONFLICT - hairstyle name exists
     SELF_CHANGE: 409 CONFLICT - admins cannot change their own active state
     NOT_READY: 409 CONFLICT - export job not finished
+    WAITLIST_CLOSED: 409 CONFLICT - the founding-salon waitlist is closed (WAITLIST_OPEN=false)
 servers:
   - url: /v1
 security:
@@ -118,6 +119,7 @@ components:
                 - NAME_TAKEN
                 - SELF_CHANGE
                 - NOT_READY
+                - WAITLIST_CLOSED
                 - booking.view
                 - booking.create
                 - booking.update
@@ -3075,6 +3077,22 @@ components:
           type: integer
           minimum: -9007199254740991
           maximum: 9007199254740991
+        waitlist:
+          type: object
+          properties:
+            total:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            last7Days:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+          required:
+            - total
+            - last7Days
+          additionalProperties: false
+          description: founding-salon waitlist sign-ups
         activeUsers:
           type: object
           properties:
@@ -3175,6 +3193,7 @@ components:
         - newContactMessages
         - subscriptionReceiptsLast30DaysPaise
         - leads
+        - waitlist
         - activeUsers
       additionalProperties: false
     AuditEntry:
@@ -3496,6 +3515,65 @@ components:
       required:
         - received
         - result
+      additionalProperties: false
+    WaitlistStatus:
+      type: object
+      properties:
+        open:
+          type: boolean
+      required:
+        - open
+      additionalProperties: false
+    WaitlistJoined:
+      type: object
+      properties:
+        status:
+          type: string
+          const: joined
+        founding:
+          type: boolean
+        createdAt:
+          type: string
+          description: when this e-mail first joined (unchanged on a repeat sign-up)
+      required:
+        - status
+        - founding
+        - createdAt
+      additionalProperties: false
+    WaitlistSignup:
+      type: object
+      properties:
+        id:
+          type: string
+        salonName:
+          type: string
+        ownerName:
+          type: string
+        email:
+          type: string
+        phone:
+          type:
+            - string
+            - "null"
+        founding:
+          type: boolean
+        createdAt:
+          type: string
+          description: ISO-8601 UTC timestamp
+        confirmationSentAt:
+          anyOf:
+            - type: string
+              description: ISO-8601 UTC timestamp
+            - type: "null"
+      required:
+        - id
+        - salonName
+        - ownerName
+        - email
+        - phone
+        - founding
+        - createdAt
+        - confirmationSentAt
       additionalProperties: false
 paths:
   /plans:
@@ -9248,6 +9326,169 @@ paths:
                     description: "Pagination: limit, nextCursor"
                 required:
                   - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /waitlist/status:
+    get:
+      tags:
+        - Waitlist
+      summary: Is the founding-salon waitlist open?
+      operationId: get_waitlist_status
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/WaitlistStatus"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security: []
+  /waitlist:
+    post:
+      tags:
+        - Waitlist
+      summary: Join the founding-salon waitlist
+      description: Rate-limited per client IP (RATE_LIMIT_WAITLIST_PER_HOUR, default 10). Same e-mail again (case-insensitive) returns 201 with the ORIGINAL createdAt and sends no second e-mail. Honeypot `website` must be empty (bots get a silent 201, nothing stored). 409 CONFLICT reason WAITLIST_CLOSED when WAITLIST_OPEN=false. A confirmation e-mail is queued after the insert (skipped when SMTP is not configured).
+      operationId: post_waitlist
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                salonName:
+                  type: string
+                  minLength: 2
+                  maxLength: 80
+                ownerName:
+                  type: string
+                  minLength: 2
+                  maxLength: 80
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                phone:
+                  description: Indian mobile number; stored as +91XXXXXXXXXX
+                  type: string
+                  maxLength: 25
+                consent:
+                  type: boolean
+                  const: true
+                website:
+                  type: string
+                  maxLength: 500
+                source:
+                  type: string
+                  maxLength: 40
+              required:
+                - salonName
+                - ownerName
+                - email
+                - consent
+              additionalProperties: false
+      responses:
+        "201":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/WaitlistJoined"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security: []
+  /admin/waitlist:
+    get:
+      tags:
+        - Admin
+      summary: Founding-salon waitlist, newest first
+      operationId: get_admin_waitlist
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 600
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WaitlistSignup"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /admin/waitlist.csv:
+    get:
+      tags:
+        - Admin
+      summary: Founding-salon waitlist as CSV
+      operationId: get_admin_waitlist_csv
+      parameters: []
+      responses:
+        "200":
+          description: text/csv
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
         default:
           description: Error
           content:

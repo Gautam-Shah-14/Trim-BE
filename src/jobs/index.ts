@@ -4,6 +4,7 @@ import { invoicesCsv } from '../lib/csv.js';
 import { sweepExpiredHolds } from '../lib/booking.js';
 import { rollupRecent } from '../lib/rollup.js';
 import { processWebhookEvent } from '../modules/webhooks.js';
+import { processWaitlistNotify } from '../modules/waitlist.js';
 
 /** Register every job handler. Handlers are idempotent: queues may deliver a job more than once. */
 export function registerJobs(deps: Deps) {
@@ -22,6 +23,11 @@ export function registerJobs(deps: Deps) {
   });
 
   // FOR UPDATE SKIP LOCKED inside; correctness never depends on this (expiry is also predicate based)
+  // founding-salon waitlist e-mails (confirmation + TokenBurners copy); a no-op when SMTP is not configured
+  queue.register('waitlist.notify', async ({ id }: { id: string }) => {
+    await processWaitlistNotify(deps, id);
+  });
+
   queue.register('booking.sweep', async () => {
     const n = await sweepExpiredHolds(pool);
     if (n) log.info({ expired: n }, 'expired booking holds');

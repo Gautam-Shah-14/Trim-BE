@@ -52,6 +52,7 @@ The API uses that address as the client IP (rate limiting, audit log `ip`, logs)
 | `INVOICE_EXISTS`, `ALREADY_VOID` | 409 | billing rules |
 | `IDEMPOTENCY_IN_PROGRESS` | 409 | same Idempotency-Key still running; retry shortly |
 | `DUPLICATE_CLOSURE`, `ROLE_NAME_TAKEN`, `ROLE_IN_USE`, `PHOTO_LIMIT`, `NAME_TAKEN`, `SELF_CHANGE`, `NOT_READY` | 409 | other uniqueness/state rules |
+| `WAITLIST_CLOSED` | 409 | `POST /waitlist` while `WAITLIST_OPEN=false` |
 
 The same list is in `openapi.yaml` (`x-error-reasons` and the `Error.reason` enum). New reasons are additive.
 

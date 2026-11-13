@@ -134,6 +134,7 @@ const AdminUser = s({ id, fullName: str, email: nstr, phone: nstr, role: str, is
 const AdminStats = s({
   customers: int, salons: s({ total: int, pending: int, approved: int }), subscriptions: s({ active: int, trialing: int, troubled: int }),
   bookingsLast30Days: int, newContactMessages: int, subscriptionReceiptsLast30DaysPaise: int, leads: int,
+  waitlist: s({ total: int, last7Days: int }).describe('founding-salon waitlist sign-ups'),
   activeUsers: s({
     asOf: str.describe('IST date YYYY-MM-DD'), dau: int, wau: int.describe('distinct users in the 7 IST days ending asOf'), mau: int.describe('distinct users in the 30 IST days ending asOf'),
     byRole: s({ customer: s({ dau: int, wau: int, mau: int }), salon_user: s({ dau: int, wau: int, mau: int }) }),
@@ -156,12 +157,15 @@ const QueueHealth = s({
 const MediaId = s({ id });
 const Ok = s({ ok: z.literal(true) });
 const WebhookAck = s({ received: z.literal(true), result: z.enum(['queued', 'duplicate']) });
+const WaitlistStatus = s({ open: bool });
+const WaitlistJoined = s({ status: z.literal('joined'), founding: bool, createdAt: ts.describe('when this e-mail first joined (unchanged on a repeat sign-up)') });
+const WaitlistSignup = s({ id, salonName: str, ownerName: str, email: str, phone: nstr, founding: bool, createdAt: ts, confirmationSentAt: nts });
 
 export const SCHEMAS: Record<string, ZodType> = {
   User, Membership, AuthTokens, AuthResult, MeResult, Limits, Entitlements, Salon, SalonFull, Hours, Closure, Service, ServiceTemplate, Staff, StaffHours, TimeOff, Role, Permission,
   ServiceIds, Booking, Invoice, PaymentMethod, SalonReview, PublicReview, NewReview, Plan, AdminPlan, SalonSummary, SalonDetail, Hairstyle, Slot, Availability, Receipt,
   SubscriptionView, CheckoutResult, AnalyticsSummary, Customer, CustomerDetail, ExportJob, ExportStarted, AdminSalon, AdminSalonDetail, CompResult, AdminUser, AdminStats, AuditEntry,
-  ContactMessage, Lead, Pipeline, Invite, InvitePrefill, QueueHealth, MediaId, Ok, WebhookAck,
+  ContactMessage, Lead, Pipeline, Invite, InvitePrefill, QueueHealth, MediaId, Ok, WebhookAck, WaitlistStatus, WaitlistJoined, WaitlistSignup,
 };
 
 /** documented reason codes for generic CONFLICT / FORBIDDEN errors (error.reason). Stable: clients may switch on them. */
@@ -195,4 +199,5 @@ export const ERROR_REASONS: Record<string, string> = {
   NAME_TAKEN: '409 CONFLICT - hairstyle name exists',
   SELF_CHANGE: '409 CONFLICT - admins cannot change their own active state',
   NOT_READY: '409 CONFLICT - export job not finished',
+  WAITLIST_CLOSED: '409 CONFLICT - the founding-salon waitlist is closed (WAITLIST_OPEN=false)',
 };

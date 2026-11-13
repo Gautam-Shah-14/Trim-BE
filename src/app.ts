@@ -38,6 +38,8 @@ import * as services from './modules/services.js';
 import * as staff from './modules/staff.js';
 import * as subscription from './modules/subscription.js';
 import * as webhooks from './modules/webhooks.js';
+import * as waitlist from './modules/waitlist.js';
+import { createMailer, type Mailer } from './lib/mailer.js';
 
 const VERSION = '0.1.0';
 
@@ -56,10 +58,12 @@ export interface CreateAppOptions {
   cache?: Cache;
   limiter?: RateLimiter;
   queue?: JobQueue;
+  /** override the mailer (tests: fake transport); default: built from SMTP_* env, disabled when not configured */
+  mailer?: Mailer;
   captureException?: (err: unknown, ctx?: Record<string, unknown>) => void;
 }
 
-export const MODULES = [pub, auth, me, media, discover, salon, services, staff, roles, bookings, billing, reviews, analytics, subscription, webhooks, admin, sales];
+export const MODULES = [pub, auth, me, media, discover, salon, services, staff, roles, bookings, billing, reviews, analytics, subscription, webhooks, admin, sales, waitlist];
 
 /** Build the Express app. Used by server.ts, by tests (with a fake gateway) and by the OpenAPI generator. */
 export function createApp(opts: CreateAppOptions): { app: Express; api: Api; deps: Deps; close: () => Promise<void> } {
@@ -72,6 +76,7 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
     limiter: opts.limiter ?? built!.limiter,
     queue: opts.queue ?? built!.queue,
     metrics,
+    mailer: opts.mailer ?? createMailer(config.mail, log),
     captureException: opts.captureException ?? (() => {}),
     config,
     pool,
@@ -212,6 +217,7 @@ export function createApp(opts: CreateAppOptions): { app: Express; api: Api; dep
     await deps.queue.stop().catch(() => {});
     await driverCache.close().catch(() => {});
     await deps.limiter.close().catch(() => {});
+    deps.mailer.close();
   };
   return { app, api, deps, close };
 }

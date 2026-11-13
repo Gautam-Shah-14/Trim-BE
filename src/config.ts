@@ -59,6 +59,19 @@ const envSchema = z.object({
   RATE_LIMIT_LOGIN_PER_15MIN: z.coerce.number().int().min(1).default(10),
   RATE_LIMIT_CONTACT_PER_HOUR: z.coerce.number().int().min(1).default(5),
   ARGON2_MEMORY_KIB: z.coerce.number().int().min(1024).default(19456),
+  WAITLIST_OPEN: bool.default(true),
+  RATE_LIMIT_WAITLIST_PER_HOUR: z.coerce.number().int().min(1).default(10),
+  SMTP_HOST: z.string().trim().default('smtp-relay.brevo.com'),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  SMTP_SECURE: bool.default(false),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
+  MAIL_FROM: z.string().trim().default('').refine((v) => !/[\r\n]/.test(v), 'MAIL_FROM must be a single line'),
+  WAITLIST_NOTIFY_TO: z
+    .string()
+    .trim()
+    .default('')
+    .refine((v) => v === '' || z.email().safeParse(v).success, 'WAITLIST_NOTIFY_TO must be one e-mail address'),
 });
 
 export interface Config {
@@ -93,8 +106,11 @@ export interface Config {
   corsOrigins: string[];
   websiteUrl: string;
   trustProxy: number;
-  rateLimit: { generalPerMin: number; loginPer15Min: number; contactPerHour: number; registerPerHour: number; availabilityPerMin: number; holdPerMin: number; checkinPerMin: number };
+  rateLimit: { generalPerMin: number; loginPer15Min: number; contactPerHour: number; registerPerHour: number; availabilityPerMin: number; holdPerMin: number; checkinPerMin: number; waitlistPerHour: number };
   argon2MemoryKib: number;
+  waitlistOpen: boolean;
+  /** SMTP (Brevo). `enabled` is false when SMTP_HOST, SMTP_USER, SMTP_PASS or MAIL_FROM is empty: mail is then skipped, never fatal. */
+  mail: { enabled: boolean; missing: string[]; host: string; port: number; secure: boolean; user: string; pass: string; from: string; waitlistNotifyTo: string };
 }
 
 export class ConfigError extends Error {}
@@ -161,7 +177,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       availabilityPerMin: e.RATE_LIMIT_AVAILABILITY_PER_MIN,
       holdPerMin: e.RATE_LIMIT_HOLD_PER_MIN,
       checkinPerMin: e.RATE_LIMIT_CHECKIN_PER_MIN,
+      waitlistPerHour: e.RATE_LIMIT_WAITLIST_PER_HOUR,
     },
     argon2MemoryKib: e.ARGON2_MEMORY_KIB,
+    waitlistOpen: e.WAITLIST_OPEN,
+    mail: (() => {
+      const missing = (['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM'] as const).filter((k) => !e[k]);
+      return {
+        enabled: missing.length === 0, missing, host: e.SMTP_HOST, port: e.SMTP_PORT, secure: e.SMTP_SECURE,
+        user: e.SMTP_USER, pass: e.SMTP_PASS, from: e.MAIL_FROM, waitlistNotifyTo: e.WAITLIST_NOTIFY_TO,
+      };
+    })(),
   };
 }

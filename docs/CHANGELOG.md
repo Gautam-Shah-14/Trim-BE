@@ -4,6 +4,14 @@ All notable changes to Trim-BE. Format: [Keep a Changelog](https://keepachangelo
 
 ## [Unreleased]
 
+### Founding-salon waitlist (contract additions; affected clients: W website, W admin console)
+- New `GET /v1/waitlist/status` -> `{open}` and `POST /v1/waitlist` `{salonName, ownerName, email, phone?, consent:true, website(honeypot)?, source?}` -> 201 `{status:"joined", founding:true, createdAt}`. A repeat e-mail (case-insensitive) returns the original `createdAt` and sends no second e-mail. New 409 `CONFLICT` reason `WAITLIST_CLOSED` (`WAITLIST_OPEN=false`). Per-IP limit `RATE_LIMIT_WAITLIST_PER_HOUR` (default 10, honours the BFF client-IP headers) -> 429 + `Retry-After`. See spec section 6 "Founding-salon waitlist".
+- Admin: `GET /v1/admin/waitlist` (cursor-paged, newest first) and `GET /v1/admin/waitlist.csv`; `GET /v1/admin/stats` gains `waitlist {total, last7Days}` (additive).
+- Migration `0012_waitlist.sql`: table `waitlist_signups` (citext unique e-mail, CHECKs, `created_at` index, RLS + `trim_api_all` policy like 0010/0011). **Not applied to Supabase** (owner applies). The table is temporary: drop it only after founding entitlements are copied onto salons.
+- E-mail: `nodemailer` 10.3.1 + `src/lib/mailer.ts` (Brevo SMTP from env) and job `waitlist.notify` (queued after the insert, retried by the queue, sets `confirmation_sent_at` / `owner_copy_sent_at`). Applicant e-mail carries no user-supplied text; owner copy escapes all input and strips CR/LF from the subject. When SMTP is not configured the mailer is disabled (one start-up warning, key names only) and sign-ups still succeed.
+- New env: `WAITLIST_OPEN`, `RATE_LIMIT_WAITLIST_PER_HOUR`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `WAITLIST_NOTIFY_TO` (`.env.example`, README, `render.yaml`).
+- Not in this change (Phase 2): applying the founding trial at registration (Starter, 60 days from first login), Razorpay changes, trial-end reminders, matching sign-ups to salons (`matched_salon_id` is reserved for it).
+
 ### Active users (DAU/WAU/MAU) for the admin dashboard
 `GET /v1/admin/stats` gains `activeUsers {asOf, dau, wau, mau, byRole{customer, salon_user}, series[30]{day, dau}}` (additive; website admin console). Activity = authenticated API usage, recorded at most once per user per IST day in the new `user_activity_days` table (migration 0011, RLS + trim_api policy like 0010), fire-and-forget so it never slows or fails a request; rows older than 400 days are deleted by the audit-retention job. No push notifications involved.
 

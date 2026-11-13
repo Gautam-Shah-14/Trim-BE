@@ -59,6 +59,21 @@ All configuration comes from environment variables, validated with zod at startu
 | `METRICS_ENABLED` / `METRICS_TOKEN` | true / empty | `GET /metrics`; with a token it needs `Authorization: Bearer <token>` or `X-Metrics-Token`. **Production refuses to start with metrics enabled and no token** |
 | `BFF_SHARED_SECRET` | empty | >= 24 chars; the website server sends it as `X-Trim-BFF-Key` with `X-Trim-Client-IP` so per-visitor rate limits work behind the proxy (see docs/CONTRACT_DECISIONS.md). Warned about at start-up in production when empty |
 | `ARGON2_MEMORY_KIB` | 19456 | argon2id memory cost |
+| `WAITLIST_OPEN` | true | founding-salon waitlist accepts sign-ups; `false` = `POST /waitlist` answers 409 `WAITLIST_CLOSED` |
+| `RATE_LIMIT_WAITLIST_PER_HOUR` | 10 | waitlist sign-ups per client IP (BFF `X-Trim-Client-IP` aware) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` | smtp-relay.brevo.com / 587 / false | SMTP server; `false` on 587 = STARTTLS (required), `true` for 465 |
+| `SMTP_USER` / `SMTP_PASS` | empty | SMTP login (Brevo: SMTP login + SMTP key). **Secrets** |
+| `MAIL_FROM` | empty | sender, e.g. `Trim by TokenBurners <waitlist@your-verified-domain>`; must be a verified Brevo sender |
+| `WAITLIST_NOTIFY_TO` | empty | TokenBurners inbox that gets a copy of every waitlist sign-up; empty = no copy |
+
+Mail is optional: when `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` or `MAIL_FROM` is empty the mailer is disabled, one warning (key names only) is logged at start-up, and sign-ups still succeed without e-mails.
+
+### Configuring Brevo (waitlist e-mails)
+1. Create a free Brevo account (brevo.com) for TokenBurners.
+2. Senders, Domains & Dedicated IPs -> add and verify the sender address you will use in `MAIL_FROM` (better: authenticate the domain with the DKIM/DMARC records Brevo shows, so mail does not land in spam).
+3. SMTP & API -> SMTP tab -> note the SMTP login and generate an **SMTP key** (not the API key).
+4. Put `SMTP_USER` (the SMTP login), `SMTP_PASS` (the SMTP key), `MAIL_FROM` and `WAITLIST_NOTIFY_TO` in your local `.env`, and in Render (Environment, the `sync: false` keys). Keep the defaults `SMTP_HOST=smtp-relay.brevo.com`, `SMTP_PORT=587`, `SMTP_SECURE=false`.
+5. Restart the API; a sign-up should produce two e-mails and set `confirmation_sent_at` / `owner_copy_sent_at` (visible in `GET /v1/admin/waitlist`).
 
 ## Scripts
 
@@ -76,7 +91,7 @@ All configuration comes from environment variables, validated with zod at startu
 
 ## Tests
 
-`npm test` needs no Docker and no installed Postgres: `tests/globalSetup.ts` boots **embedded-postgres** (real PostgreSQL 18 binaries incl. `btree_gist`), migrates and seeds a template database once, and each test file clones it. Suites: slot maths across timezones/DST/closures/time off, QR, entitlements, RBAC defaults, validation, and API-level integration including the spec section 7 concurrency rules (50 parallel holds, partial overlaps, hold expiry, idempotency keys, double check-in, optimistic versions, 30 parallel invoices, webhook replay/out-of-order, max_staff race), plus rate limiting, cache invalidation, queue-backed webhook (pg-boss), 409 alternatives, hoarding caps, rollups/exports, TLS option builder, RLS migration and a contract test that validates responses against `src/schemas.ts`. Last run: 9 files, 122 tests passing.
+`npm test` needs no Docker and no installed Postgres: `tests/globalSetup.ts` boots **embedded-postgres** (real PostgreSQL 18 binaries incl. `btree_gist`), migrates and seeds a template database once, and each test file clones it. Suites: slot maths across timezones/DST/closures/time off, QR, entitlements, RBAC defaults, validation, and API-level integration including the spec section 7 concurrency rules (50 parallel holds, partial overlaps, hold expiry, idempotency keys, double check-in, optimistic versions, 30 parallel invoices, webhook replay/out-of-order, max_staff race), plus rate limiting, cache invalidation, queue-backed webhook (pg-boss), 409 alternatives, hoarding caps, rollups/exports, TLS option builder, RLS migration, the founding-salon waitlist (validation, duplicates, honeypot, closed, rate limit, admin auth/CSV, e-mail job via a fake nodemailer transport) and a contract test that validates responses against `src/schemas.ts`. Last run (2026-11-13): 12 files, 155 tests passing.
 
 ## Structure
 
@@ -86,8 +101,9 @@ src/app.ts           app factory (middleware order, module registration)
 src/server.ts        process entry: config, pool, sweeper, graceful shutdown
 src/http/            Api route registry + auth/salon/permission guards, zod helpers, idempotency, rate limits
 src/modules/         one file per area: auth, me, media, discover, salon, services, staff, roles, bookings,
-                     billing, reviews, analytics, subscription, webhooks, admin, sales, public
-src/lib/             pure/domain logic: slots, entitlements, qr, permissions, security, booking, gateway (Razorpay)
+                     billing, reviews, analytics, subscription, webhooks, admin, sales, public, waitlist
+src/lib/             pure/domain logic: slots, entitlements, qr, permissions, security, booking, gateway (Razorpay),
+                     mailer (nodemailer/SMTP), waitlistMail (e-mail templates)
 src/seed/            service templates and hairstyle catalog
 scripts/             migrate, seed, create-admin, create-razorpay-plans, gen-openapi
 tests/               vitest suites
@@ -97,6 +113,6 @@ docs/                Architecture, KT_Guide, CHANGELOG, spec
 
 ## API overview
 
-Base path `/v1`; responses `{data, meta?}` or `{error:{code,message,details?}}`; money in integer paise; times ISO-8601 UTC. `/health` is outside `/v1`. Groups: Auth, Profile (`/me`), Media, Discover + availability, Bookings (customer), Salon (profile, hours, closures), Services, Staff, Roles, Salon bookings + check-in, Billing + payment methods, Reviews, Analytics + CSV, Customers CRM, Subscription, Webhooks, Admin, Sales, public (`/plans`, `/contact`, `/hairstyles`, `/service-templates`). The full list with schemas is in `openapi.yaml`; deviations and interpretations of the spec are in [docs/Architecture.md](docs/Architecture.md) under "Decisions".
+Base path `/v1`; responses `{data, meta?}` or `{error:{code,message,details?}}`; money in integer paise; times ISO-8601 UTC. `/health` is outside `/v1`. Groups: Auth, Profile (`/me`), Media, Discover + availability, Bookings (customer), Salon (profile, hours, closures), Services, Staff, Roles, Salon bookings + check-in, Billing + payment methods, Reviews, Analytics + CSV, Customers CRM, Subscription, Webhooks, Admin, Sales, Waitlist (`/waitlist/status`, `/waitlist`, admin `/admin/waitlist[.csv]`), public (`/plans`, `/contact`, `/hairstyles`, `/service-templates`). The full list with schemas is in `openapi.yaml`; deviations and interpretations of the spec are in [docs/Architecture.md](docs/Architecture.md) under "Decisions".
 
 Docs: [Architecture](docs/Architecture.md), [KT guide](docs/KT_Guide.md), [Changelog](docs/CHANGELOG.md).

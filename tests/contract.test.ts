@@ -163,6 +163,11 @@ describe('responses match the documented schemas (src/schemas.ts -> openapi.yaml
     check('InvitePrefill', await call(ctx, 'GET', `/v1/invites/${invite.body.data.code}`), 'GET /invites/:code');
     check('Pipeline', await call(ctx, 'GET', '/v1/sales/pipeline', { token: A }), 'GET pipeline');
 
+    // founding-salon waitlist
+    check('WaitlistStatus', await call(ctx, 'GET', '/v1/waitlist/status'), 'GET /waitlist/status');
+    check('WaitlistJoined', await call(ctx, 'POST', '/v1/waitlist', { body: { salonName: 'Wait Salon', ownerName: 'Wendy', email: `wl-${randomUUID()}@example.test`, consent: true } }), 'POST /waitlist');
+    check('WaitlistSignup[]', await call(ctx, 'GET', '/v1/admin/waitlist', { token: A }), 'GET /admin/waitlist');
+
     // webhook ack shape
     expect(problems).toEqual([]);
   }, 120_000);

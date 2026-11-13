@@ -152,8 +152,22 @@ POST `/media` (`{kind, mime, dataBase64, salonId?}`, ≤200 KB decoded, validate
 ### Public / website / admin
 - GET `/plans` (public); POST `/contact` (public, rate-limited, honeypot field `website` must be empty)
 - POST `/webhooks/razorpay` — verify `X-Razorpay-Signature` with `RAZORPAY_WEBHOOK_SECRET` over the raw body; insert into `subscription_events` (unique `razorpay_event_id`; duplicate → 200 no-op) then apply: `subscription.authenticated/activated/charged/pending/halted/cancelled/completed`, `payment.failed` → update `subscriptions`, insert `subscription_receipts` on `charged`. Webhook is the source of truth; never trust a client-side success callback — after Checkout the client just polls GET subscription.
-- Admin (`admin` role): GET/PATCH `/admin/salons` (approve/suspend; approving sets `approved`), GET `/admin/salons/:id`, PATCH `/admin/plans/:code` (prices/limits), POST `/admin/salons/:id/comp` `{until}`, GET `/admin/contact-messages` + PATCH, GET `/admin/users`, GET `/admin/stats`, GET `/admin/audit`, hairstyle catalog CRUD, user management of `sales_agent`s.
+- Admin (`admin` role): GET/PATCH `/admin/salons` (approve/suspend; approving sets `approved`), GET `/admin/salons/:id`, PATCH `/admin/plans/:code` (prices/limits), POST `/admin/salons/:id/comp` `{until}`, GET `/admin/contact-messages` + PATCH, GET `/admin/users`, GET `/admin/stats`, GET `/admin/audit`, GET `/admin/waitlist` + `/admin/waitlist.csv`, hairstyle catalog CRUD, user management of `sales_agent`s.
 - Sales agent (`sales_agent` or `admin`): CRUD `/sales/leads`, POST `/sales/leads/:id/invite` (creates a salon-owner invite code to the website register page prefilled), GET `/sales/pipeline`.
+
+### Founding-salon waitlist (added 2026-11-13, pre-launch)
+Until the Play Store launch salons can join a free waitlist; waitlist ("founding") salons get 2 months of the **Starter** plan free from their first login after launch. Table `waitlist_signups` (migration 0012) is **temporary**: it may be dropped after launch only once the founding entitlements have been copied onto the matching salons (`matched_salon_id`). NOT part of this change (Phase 2): applying the founding trial at registration (Starter, 60 days from first login), any Razorpay change, trial-end reminders.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | /waitlist/status | public, `Cache-Control: public, max-age=30` → `{open}` (env `WAITLIST_OPEN`, default true) |
+| POST | /waitlist | public. Body (strict): `salonName` 2-80 trimmed, `ownerName` 2-80 (no control characters), `email` required ≤254 (lower-cased), `phone?` Indian mobile (`+91`/`91`/`0` prefixes, spaces/dashes ok; stored `+91XXXXXXXXXX`; empty string = none), `consent` must be literal `true`, `website` honeypot (non-empty → 201 as if joined, nothing stored), `source?` ≤40. → 201 `{status:"joined", founding:true, createdAt}`. Same e-mail again (case-insensitive) → 201 with the ORIGINAL `createdAt`, no second e-mail, nothing else revealed. Closed → 409 `CONFLICT` reason `WAITLIST_CLOSED`. 422 `VALIDATION_FAILED`; 429 per client IP (`RATE_LIMIT_WAITLIST_PER_HOUR`, default 10, BFF `X-Trim-Client-IP` respected) with `Retry-After`. After the insert a job `waitlist.notify` e-mails the applicant ("You're on the Trim waitlist") and a copy to `WAITLIST_NOTIFY_TO`; SMTP not configured → no e-mails, sign-up still succeeds. |
+| GET | /admin/waitlist | admin; `?limit&cursor`, newest first → `[{id, salonName, ownerName, email, phone, founding, createdAt, confirmationSentAt}]` |
+| GET | /admin/waitlist.csv | admin; CSV export of all rows (formula-injection safe) |
+
+`GET /admin/stats` additionally returns `waitlist {total, last7Days}`.
+
+Documented `error.reason` values for CONFLICT/FORBIDDEN are listed in `openapi.yaml` (`x-error-reasons`, generated from `src/schemas.ts`); new: `WAITLIST_CLOSED` (409).
 
 ### QR token
 `qrToken` = compact signed token `base64url(payload).base64url(hmac_sha256(QR_SECRET, payload))`, payload `{b: bookingId, s: salonId, n: qr_nonce, e: exp}` with `exp = ends_at + 60 min`. The QR encodes the token string. The nonce is stored on the booking and rotated on reschedule so old QRs die.

@@ -9,6 +9,7 @@ import type { CacheService } from '../infra/cache.js';
 import type { RateLimiter } from '../infra/limiter.js';
 import type { JobQueue } from '../infra/queue.js';
 import type { Metrics } from '../infra/metrics.js';
+import type { Mailer } from '../lib/mailer.js';
 
 export interface Deps {
   config: Config;
@@ -20,6 +21,8 @@ export interface Deps {
   limiter: RateLimiter;
   queue: JobQueue;
   metrics: Metrics;
+  /** outgoing e-mail (disabled when SMTP is not configured) */
+  mailer: Mailer;
   /** error-tracking hook (Sentry compatible): called for unexpected 5xx errors */
   captureException: (err: unknown, ctx?: Record<string, unknown>) => void;
 }

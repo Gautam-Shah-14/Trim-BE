@@ -69,6 +69,7 @@ export async function startCtx(overrides: Record<string, string> = {}, extra: Pa
     RATE_LIMIT_AVAILABILITY_PER_MIN: '100000',
     RATE_LIMIT_HOLD_PER_MIN: '100000',
     RATE_LIMIT_CHECKIN_PER_MIN: '100000',
+    RATE_LIMIT_WAITLIST_PER_HOUR: '100000',
     // caches off by default so tests that edit rows with SQL see them immediately; cache.test.ts turns them on
     CACHE_TTL_PLANS_S: '0',
     CACHE_TTL_CATALOG_S: '0',
