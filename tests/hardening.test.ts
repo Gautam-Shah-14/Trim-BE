@@ -106,7 +106,7 @@ describe('D-03 account lockout carries Retry-After', () => {
     expect(r.body.error.code).toBe('RATE_LIMITED');
     const ra = Number(r.headers.get('retry-after'));
     expect(ra).toBeGreaterThan(800);
-    expect(ra).toBeLessThanOrEqual(900);
+    expect(ra).toBeLessThanOrEqual(905); // lock end comes from the DB clock; ceil() plus clock skew can give 901
     expect(r.body.error.details.retryAfterSec).toBe(ra);
     expect(r.body.error.details.lockedUntil).toBeTruthy();
   });
