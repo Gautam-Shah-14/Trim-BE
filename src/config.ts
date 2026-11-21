@@ -72,6 +72,9 @@ const envSchema = z.object({
     .trim()
     .default('')
     .refine((v) => v === '' || z.email().safeParse(v).success, 'WAITLIST_NOTIFY_TO must be one e-mail address'),
+  MFA_ENCRYPTION_KEY: z.string().default('').refine((v) => v === '' || /^[0-9a-f]{64}$/i.test(v), 'MFA_ENCRYPTION_KEY must be 64 hex characters (32 bytes) when set'),
+  RATE_LIMIT_OTP_PER_EMAIL_PER_HOUR: z.coerce.number().int().min(1).default(5),
+  RATE_LIMIT_OTP_PER_IP_PER_HOUR: z.coerce.number().int().min(1).default(20),
 });
 
 export interface Config {
@@ -106,11 +109,13 @@ export interface Config {
   corsOrigins: string[];
   websiteUrl: string;
   trustProxy: number;
-  rateLimit: { generalPerMin: number; loginPer15Min: number; contactPerHour: number; registerPerHour: number; availabilityPerMin: number; holdPerMin: number; checkinPerMin: number; waitlistPerHour: number };
+  rateLimit: { generalPerMin: number; loginPer15Min: number; contactPerHour: number; registerPerHour: number; availabilityPerMin: number; holdPerMin: number; checkinPerMin: number; waitlistPerHour: number; otpPerEmailPerHour: number; otpPerIpPerHour: number };
   argon2MemoryKib: number;
   waitlistOpen: boolean;
   /** SMTP (Brevo). `enabled` is false when SMTP_HOST, SMTP_USER, SMTP_PASS or MAIL_FROM is empty: mail is then skipped, never fatal. */
   mail: { enabled: boolean; missing: string[]; host: string; port: number; secure: boolean; user: string; pass: string; from: string; waitlistNotifyTo: string };
+  /** AES-256-GCM key (64 hex chars) for encrypting MFA TOTP secrets. Empty = MFA setup disabled. */
+  mfaEncryptionKey: string;
 }
 
 export class ConfigError extends Error {}
@@ -178,9 +183,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       holdPerMin: e.RATE_LIMIT_HOLD_PER_MIN,
       checkinPerMin: e.RATE_LIMIT_CHECKIN_PER_MIN,
       waitlistPerHour: e.RATE_LIMIT_WAITLIST_PER_HOUR,
+      otpPerEmailPerHour: e.RATE_LIMIT_OTP_PER_EMAIL_PER_HOUR,
+      otpPerIpPerHour: e.RATE_LIMIT_OTP_PER_IP_PER_HOUR,
     },
     argon2MemoryKib: e.ARGON2_MEMORY_KIB,
     waitlistOpen: e.WAITLIST_OPEN,
+    mfaEncryptionKey: e.MFA_ENCRYPTION_KEY,
     mail: (() => {
       const missing = (['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM'] as const).filter((k) => !e[k]);
       return {

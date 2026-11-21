@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
-import { call, makeCustomer, makeOwner, PASSWORD, phone, sign, startCtx, type Ctx } from './helpers.js';
+import { call, makeCustomer, makeEmailVerificationToken, makeOwner, PASSWORD, phone, sign, startCtx, type Ctx } from './helpers.js';
 
 const ctxs: Ctx[] = [];
 const boot = async (env: Record<string, string> = {}) => {
@@ -54,9 +54,11 @@ describe('D-01 authenticated BFF client IP', () => {
     expect(r).toEqual([201, 201, 429]);
 
     const ctx2 = await boot({ BFF_SHARED_SECRET: secret });
+    const bffEmail = `bff-${randomUUID()}@example.test`;
+    const bffToken = await makeEmailVerificationToken(ctx2, bffEmail);
     const reg = await call(ctx2, 'POST', '/v1/auth/register-owner', {
       headers: { 'X-Trim-BFF-Key': secret, 'X-Trim-Client-IP': '203.0.113.77' },
-      body: { fullName: 'Bff Owner', phone: phone(), email: `bff-${randomUUID()}@example.test`, password: PASSWORD, salon: { name: 'Bff Salon' } },
+      body: { fullName: 'Bff Owner', phone: phone(), email: bffEmail, password: PASSWORD, emailVerificationToken: bffToken, salon: { name: 'Bff Salon' } },
     });
     expect(reg.status).toBe(201);
     const audit = await ctx2.pool.query("SELECT ip FROM audit_log WHERE action = 'salon.registered' ORDER BY id DESC LIMIT 1");
@@ -199,7 +201,9 @@ describe('UTF-8 end to end (embedded Postgres is initialised with UTF8)', () => 
     const enc = await ctx.pool.query('SHOW server_encoding');
     expect(enc.rows[0].server_encoding).toBe('UTF8');
     const name = 'राहुल 😀 Ünï';
-    const reg = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: name, email: `u-${randomUUID()}@example.test`, password: PASSWORD } });
+    const utfEmail = `u-${randomUUID()}@example.test`;
+    const utfToken = await makeEmailVerificationToken(ctx, utfEmail);
+    const reg = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: name, email: utfEmail, password: PASSWORD, emailVerificationToken: utfToken } });
     expect(reg.status).toBe(201);
     expect(reg.body.data.user.fullName).toBe(name);
     const me = await call(ctx, 'GET', '/v1/me', { token: reg.body.data.accessToken });

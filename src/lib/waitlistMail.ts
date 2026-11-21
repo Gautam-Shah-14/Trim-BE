@@ -1,33 +1,19 @@
 import type { MailMessage } from './mailer.js';
 import { headerSafe } from './mailer.js';
+import { layout, escapeHtml, PRIVACY_POLICY_URL } from './emailLayout.js';
 
-/** TokenBurners legal pages (workspace rule: link, never copy). */
-export const PRIVACY_POLICY_URL = 'https://tokenburners.co.in/legal/privacy-policy';
 
 /** The confirmation sentence is product copy agreed with the owner: keep it byte-for-byte (curly apostrophes). */
 export const WAITLIST_CONFIRMATION = 'You’re on the list. You’ll get a 2-month free trial from your first login after launch. We’ll notify you when Trim is ready.';
 export const WAITLIST_CONSENT_REMINDER = 'We’ll message you when Trim is ready. Nothing else.';
 export const WAITLIST_SUBJECT = "You're on the Trim waitlist";
 
-export const escapeHtml = (s: unknown) =>
-  String(s ?? '').replace(/[&<>"'`]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' })[c]!);
+// Re-export for backwards compatibility (other modules import from here)
+export { escapeHtml, PRIVACY_POLICY_URL };
 
 const AMBER = '#FFB808';
 const INK = '#1A1A1A';
 
-/** minimal, table-based, inline-styled HTML (no images, no tracking pixels, no external resources) */
-function layout(bodyHtml: string): string {
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trim</title></head>
-<body style="margin:0;padding:0;background:#F6F4EF;font-family:Arial,Helvetica,sans-serif;color:${INK};">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F6F4EF;padding:24px 12px;"><tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#FFFFFF;border-radius:12px;overflow:hidden;">
-<tr><td style="background:${AMBER};color:${INK};padding:20px 24px;font-size:24px;font-weight:bold;letter-spacing:0.5px;">Trim</td></tr>
-<tr><td style="padding:24px;font-size:16px;line-height:1.5;color:${INK};">${bodyHtml}</td></tr>
-<tr><td style="padding:16px 24px;border-top:1px solid #EEE;font-size:12px;line-height:1.5;color:#666;">Trim by TokenBurners &middot; A TokenBurners product<br><a href="${escapeHtml(PRIVACY_POLICY_URL)}" style="color:#666;">Privacy policy</a></td></tr>
-</table></td></tr></table>
-</body></html>`;
-}
 
 /**
  * E-mail to the applicant. Deliberately contains NO user-supplied text (names etc.): anyone can type any address into a public form,
@@ -50,7 +36,7 @@ export function applicantEmail(to: string, websiteUrl: string): MailMessage {
   ].join('\n');
   const html = layout(
     `<p style="margin:0 0 16px;font-size:18px;font-weight:bold;">${escapeHtml(WAITLIST_CONFIRMATION)}</p>
-<p style="margin:0 0 16px;">The free trial is on the <strong>Starter</strong> plan. <a href="${escapeHtml(terms)}" style="color:${INK};">Read the trial terms</a>.</p>
+<p style="margin:0 0 16px;">The free trial is on the <strong>Starter</strong> plan. <a href="${escapeHtml(terms)}" style="color:#1A1A1A;">Read the trial terms</a>.</p>
 <p style="margin:0;color:#444;">${escapeHtml(WAITLIST_CONSENT_REMINDER)}</p>`,
   );
   return { to, subject: WAITLIST_SUBJECT, text, html };

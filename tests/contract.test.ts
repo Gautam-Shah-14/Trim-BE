@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SCHEMAS } from '../src/schemas.js';
-import { call, makeCustomer, makeOwner, openAllDay, PASSWORD, phone, slotAt, startCtx, type Ctx } from './helpers.js';
+import { call, makeCustomer, makeEmailVerificationToken, makeOwner, openAllDay, PASSWORD, phone, slotAt, startCtx, type Ctx } from './helpers.js';
 
 let ctx: Ctx;
 beforeAll(async () => {
@@ -45,9 +45,13 @@ describe('responses match the documented schemas (src/schemas.ts -> openapi.yaml
     const sid = o.salonId;
 
     // auth + profile
-    const reg = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'Reg', email: `r-${randomUUID()}@example.test`, password: PASSWORD } });
+    const regEmail = `r-${randomUUID()}@example.test`;
+    const regToken = await makeEmailVerificationToken(ctx, regEmail);
+    const reg = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'Reg', email: regEmail, password: PASSWORD, emailVerificationToken: regToken } });
     check('AuthResult', reg, 'POST /auth/register');
-    const regOwner = await call(ctx, 'POST', '/v1/auth/register-owner', { body: { fullName: 'O', phone: phone(), email: `o-${randomUUID()}@example.test`, password: PASSWORD, salon: { name: 'Another Salon' } } });
+    const regOwnerEmail = `o-${randomUUID()}@example.test`;
+    const regOwnerToken = await makeEmailVerificationToken(ctx, regOwnerEmail);
+    const regOwner = await call(ctx, 'POST', '/v1/auth/register-owner', { body: { fullName: 'O', phone: phone(), email: regOwnerEmail, password: PASSWORD, emailVerificationToken: regOwnerToken, salon: { name: 'Another Salon' } } });
     check('AuthResult', regOwner, 'POST /auth/register-owner');
     expect(regOwner.body.data.salon).toBeTruthy();
     const login = await call(ctx, 'POST', '/v1/auth/login', { body: { identifier: o.email, password: PASSWORD, client: 'salon_app' } });

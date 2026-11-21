@@ -95,7 +95,7 @@ export function register(api: Api) {
     await withTx(deps.pool, async (c) => {
       const cur = (await c.query('SELECT * FROM subscriptions WHERE salon_id = $1 FOR UPDATE', [ctx.salonId])).rows[0]!;
       if (!['active', 'trialing', 'past_due'].includes(cur.status)) throw E.conflict(`A ${cur.status} subscription cannot be cancelled`, 'INVALID_STATE');
-      if (cur.razorpay_subscription_id && cur.status !== 'trialing') {
+      if (cur.razorpay_subscription_id) {
         try {
           await deps.gateway.cancelSubscription(cur.razorpay_subscription_id, true);
         } catch (err) {
@@ -103,7 +103,12 @@ export function register(api: Api) {
           throw new AppError('UPSTREAM_ERROR', 'The payment provider is unavailable, please try again shortly', undefined, 'PAYMENT_PROVIDER');
         }
       }
-      await c.query('UPDATE subscriptions SET cancel_at_period_end = true, updated_at = now() WHERE salon_id = $1', [ctx.salonId]);
+      if (cur.status === 'trialing') {
+        // Trialing subs end immediately on cancel (no period to wait for)
+        await c.query("UPDATE subscriptions SET status = 'cancelled', cancel_at_period_end = false, updated_at = now() WHERE salon_id = $1", [ctx.salonId]);
+      } else {
+        await c.query('UPDATE subscriptions SET cancel_at_period_end = true, updated_at = now() WHERE salon_id = $1', [ctx.salonId]);
+      }
     });
     await auditReq(req, { action: 'subscription.cancel_requested', entity: 'salon', entityId: ctx.salonId });
     send(res, await view(ctx.salonId));

@@ -31,6 +31,8 @@ export interface NewSalonInput {
   createdBy: string;
   ownerUserId: string;
   ownerDisplayName: string;
+  /** Founding trial: Starter plan, trial_ends_at set on first login (not at registration). */
+  foundingTrial?: boolean;
 }
 
 export const DEFAULT_PAYMENT_METHODS = [
@@ -79,11 +81,20 @@ export async function createSalonWithDefaults(c: pg.PoolClient, input: NewSalonI
     await c.query('INSERT INTO salon_payment_methods (salon_id, code, label, is_enabled, sort) VALUES ($1,$2,$3,$4,$5)', [salonId, m.code, m.label, m.enabled, i]);
   }
   await c.query('INSERT INTO invoice_counters (salon_id, last_no) VALUES ($1, 0)', [salonId]);
-  await c.query(
-    `INSERT INTO subscriptions (salon_id, plan_code, interval, status, trial_ends_at)
-     VALUES ($1, 'pro', 'monthly', 'trialing', now() + interval '14 days')`,
-    [salonId],
-  );
+  if (input.foundingTrial) {
+    // Founding salons: Starter plan, trial_ends_at is NULL until first login after launch (set by the login handler)
+    await c.query(
+      `INSERT INTO subscriptions (salon_id, plan_code, interval, status, trial_ends_at, founding_trial)
+       VALUES ($1, 'starter', 'monthly', 'trialing', NULL, true)`,
+      [salonId],
+    );
+  } else {
+    await c.query(
+      `INSERT INTO subscriptions (salon_id, plan_code, interval, status, trial_ends_at)
+       VALUES ($1, 'pro', 'monthly', 'trialing', now() + interval '14 days')`,
+      [salonId],
+    );
+  }
   return { salonId, roleIds, staffId: st.rows[0]!.id };
 }
 

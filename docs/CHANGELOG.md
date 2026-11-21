@@ -4,6 +4,39 @@ All notable changes to Trim-BE. Format: [Keep a Changelog](https://keepachangelo
 
 ## [Unreleased]
 
+### Email verification OTP system (contract change: C customer app, S salon app, W website, D desktop)
+- **`POST /auth/send-otp`**: generates a 6-digit OTP, stores SHA-256 hash in `email_otps` table (5 min expiry, max 5 active per email), sends via Brevo SMTP. Rate-limited: 5/email/hour, 20/IP/hour.
+- **`POST /auth/verify-otp`**: validates OTP, returns a one-time `emailVerificationToken` (15 min expiry) for use in registration.
+- **`POST /auth/register`**: now requires `emailVerificationToken` when `email` is provided. Phone-only registration unchanged.
+- **`POST /auth/register-owner`**: now requires `emailVerificationToken` (email is mandatory for owners). Founding trial waitlist match happens after email is verified.
+
+### MFA (TOTP authenticator app) (contract change: C, S, W, D)
+- **`POST /auth/mfa/setup`** (auth: user): generates TOTP secret, returns `{ secret, otpAuthUrl, qrDataUrl }`. Requires `MFA_ENCRYPTION_KEY` env var.
+- **`POST /auth/mfa/verify-setup`** (auth: user): verifies TOTP code, enables MFA, returns 8 backup codes.
+- **`POST /auth/mfa/disable`** (auth: user): verifies TOTP code, disables MFA.
+- **`POST /auth/login`**: when MFA is enabled, returns `{ mfaRequired: true, mfaToken }` instead of full auth. The `mfaToken` is a 5-min JWT.
+- **`POST /auth/mfa/challenge`** (auth: none): completes MFA with TOTP code or backup code, issues full session. Rate-limited: 5 attempts per mfaToken.
+- New env vars: `MFA_ENCRYPTION_KEY`, `RATE_LIMIT_OTP_PER_EMAIL_PER_HOUR`, `RATE_LIMIT_OTP_PER_IP_PER_HOUR`.
+
+### Client-role gate fix
+- **`POST /auth/login`**: customer_app clients are now rejected with 403 when the account has `platform_role = salon_user`. Previously salon owners could log in to the customer app.
+
+### Email template upgrade
+- Extracted shared `layout()` from `waitlistMail.ts` into `src/lib/emailLayout.ts`. All emails (waitlist, trial reminder, OTP) now use the same branded template with optional unsubscribe URL support.
+
+### Migration 0014
+- `email_otps` table with RLS policy, indexes for email lookup and token verification.
+- `users` table gains `mfa_secret_encrypted`, `mfa_enabled`, `mfa_backup_codes_hash` columns.
+- **Not applied to Supabase** (owner applies).
+
+### Founding trial Phase 2 (contract change: S salon app, W website, D desktop)
+- **Founding trial at registration**: `POST /auth/register-owner` now matches the email against `waitlist_signups` (founding, unmatched). If matched: Starter plan trial with `trial_ends_at = NULL` (clock doesn't start until first login), `founding_trial = true`, and `waitlist_signups.matched_salon_id` is set. Unmatched emails still get the default 14-day Pro trial.
+- **Trial activation on first login**: `POST /auth/login` for salon users activates founding trials by setting `trial_ends_at = now() + 60 days` on any subscription with `founding_trial = true AND trial_ends_at IS NULL`.
+- **Cancel-flow fixes**: trialing subscriptions with a `razorpay_subscription_id` (from card auth during trial) now cancel on Razorpay too. Trialing subs cancel immediately (status → cancelled) instead of setting `cancel_at_period_end`.
+- **Trial-end reminder emails**: daily `trial.remind` job sends a 3-day warning to salon owners whose trial is ending soon. Uses `trial_reminder_sent_at` column to avoid duplicates.
+- **Entitlements**: founding trial salons get Starter-level limits during trial (not Pro). Founding trials with `trial_ends_at = NULL` (not yet activated) get access at their plan level.
+- Migration `0013_founding_trial.sql`: adds `founding_trial boolean DEFAULT false` and `trial_reminder_sent_at timestamptz` to `subscriptions`. **Not applied to Supabase** (owner applies).
+
 ### Founding-salon waitlist (contract additions; affected clients: W website, W admin console)
 - New `GET /v1/waitlist/status` -> `{open}` and `POST /v1/waitlist` `{salonName, ownerName, email, phone?, consent:true, website(honeypot)?, source?}` -> 201 `{status:"joined", founding:true, createdAt}`. A repeat e-mail (case-insensitive) returns the original `createdAt` and sends no second e-mail. New 409 `CONFLICT` reason `WAITLIST_CLOSED` (`WAITLIST_OPEN=false`). Per-IP limit `RATE_LIMIT_WAITLIST_PER_HOUR` (default 10, honours the BFF client-IP headers) -> 429 + `Retry-After`. See spec section 6 "Founding-salon waitlist".
 - Admin: `GET /v1/admin/waitlist` (cursor-paged, newest first) and `GET /v1/admin/waitlist.csv`; `GET /v1/admin/stats` gains `waitlist {total, last7Days}` (additive).

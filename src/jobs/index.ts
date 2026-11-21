@@ -3,6 +3,7 @@ import type { Deps } from '../http/types.js';
 import { invoicesCsv } from '../lib/csv.js';
 import { sweepExpiredHolds } from '../lib/booking.js';
 import { rollupRecent } from '../lib/rollup.js';
+import { trialEndingEmail } from '../lib/trialMail.js';
 import { processWebhookEvent } from '../modules/webhooks.js';
 import { processWaitlistNotify } from '../modules/waitlist.js';
 
@@ -44,6 +45,36 @@ export function registerJobs(deps: Deps) {
     await pool.query("DELETE FROM user_activity_days WHERE day < current_date - 400");
   });
 
+  // Trial-end reminder: 3-day warning email to salon owners whose trial is ending soon
+  queue.register('trial.remind', async () => {
+    if (!deps.mailer.enabled) return;
+    const r = await pool.query<{ salon_id: string; salon_name: string; email: string; trial_ends_at: Date }>(
+      `SELECT s.id AS salon_id, s.name AS salon_name, u.email, sub.trial_ends_at
+         FROM subscriptions sub
+         JOIN salons s ON s.id = sub.salon_id
+         JOIN salon_staff st ON st.salon_id = s.id AND st.is_active
+         JOIN salon_roles sr ON sr.id = st.role_id AND sr.name = 'owner'
+         JOIN users u ON u.id = st.user_id AND u.email IS NOT NULL
+        WHERE sub.status = 'trialing'
+          AND sub.trial_ends_at IS NOT NULL
+          AND sub.trial_ends_at BETWEEN now() AND now() + interval '3 days'
+          AND sub.trial_reminder_sent_at IS NULL
+          AND sub.cancel_at_period_end = false
+        LIMIT 100`,
+    );
+    for (const row of r.rows) {
+      const daysLeft = Math.max(1, Math.ceil((row.trial_ends_at.getTime() - Date.now()) / 86_400_000));
+      try {
+        await deps.mailer.send(trialEndingEmail(row.email, row.salon_name, daysLeft, deps.config.websiteUrl));
+        await pool.query('UPDATE subscriptions SET trial_reminder_sent_at = now() WHERE salon_id = $1', [row.salon_id]);
+        deps.metrics.inc('mail_sent_total', { kind: 'trial_reminder' });
+      } catch (err) {
+        deps.metrics.inc('mail_failed_total', { kind: 'trial_reminder' });
+        log.warn({ err: (err as Error).message, salonId: row.salon_id }, 'trial reminder email failed (will retry next run)');
+      }
+    }
+  });
+
   queue.register('export.run', async ({ jobId }: { jobId: string }) => {
     const j = await pool.query<{ salon_id: string; params: { start: string; end: string }; status: string }>(
       "UPDATE export_jobs SET status = 'running' WHERE id = $1 AND status IN ('queued','running') RETURNING salon_id, params, status",
@@ -67,6 +98,7 @@ export function scheduleRecurring(deps: Deps) {
   q.every('booking.sweep', 30_000);
   q.every('webhook.retry', 60_000);
   q.every('stats.rollup', 3_600_000);
+  q.every('trial.remind', 86_400_000);
   q.every('audit.retention', 86_400_000);
 }
 

@@ -157,6 +157,10 @@ const QueueHealth = s({
 const MediaId = s({ id });
 const Ok = s({ ok: z.literal(true) });
 const WebhookAck = s({ received: z.literal(true), result: z.enum(['queued', 'duplicate']) });
+const EmailVerificationResult = s({ emailVerificationToken: str });
+const MfaSetup = s({ secret: str, otpAuthUrl: str, qrDataUrl: str });
+const MfaBackupCodes = s({ backupCodes: arr(str) });
+const MfaRequired = s({ mfaRequired: z.literal(true), mfaToken: str });
 const WaitlistStatus = s({ open: bool });
 const WaitlistJoined = s({ status: z.literal('joined'), founding: bool, createdAt: ts.describe('when this e-mail first joined (unchanged on a repeat sign-up)') });
 const WaitlistSignup = s({ id, salonName: str, ownerName: str, email: str, phone: nstr, founding: bool, createdAt: ts, confirmationSentAt: nts });
@@ -165,7 +169,9 @@ export const SCHEMAS: Record<string, ZodType> = {
   User, Membership, AuthTokens, AuthResult, MeResult, Limits, Entitlements, Salon, SalonFull, Hours, Closure, Service, ServiceTemplate, Staff, StaffHours, TimeOff, Role, Permission,
   ServiceIds, Booking, Invoice, PaymentMethod, SalonReview, PublicReview, NewReview, Plan, AdminPlan, SalonSummary, SalonDetail, Hairstyle, Slot, Availability, Receipt,
   SubscriptionView, CheckoutResult, AnalyticsSummary, Customer, CustomerDetail, ExportJob, ExportStarted, AdminSalon, AdminSalonDetail, CompResult, AdminUser, AdminStats, AuditEntry,
-  ContactMessage, Lead, Pipeline, Invite, InvitePrefill, QueueHealth, MediaId, Ok, WebhookAck, WaitlistStatus, WaitlistJoined, WaitlistSignup,
+  ContactMessage, Lead, Pipeline, Invite, InvitePrefill, QueueHealth, MediaId, Ok, WebhookAck,
+  EmailVerificationResult, MfaSetup, MfaBackupCodes, MfaRequired,
+  WaitlistStatus, WaitlistJoined, WaitlistSignup,
 };
 
 /** documented reason codes for generic CONFLICT / FORBIDDEN errors (error.reason). Stable: clients may switch on them. */
@@ -199,5 +205,9 @@ export const ERROR_REASONS: Record<string, string> = {
   NAME_TAKEN: '409 CONFLICT - hairstyle name exists',
   SELF_CHANGE: '409 CONFLICT - admins cannot change their own active state',
   NOT_READY: '409 CONFLICT - export job not finished',
+  EMAIL_NOT_VERIFIED: '400 VALIDATION_FAILED - email must be verified before registration (send OTP first)',
+  MFA_NOT_CONFIGURED: '409 CONFLICT - MFA_ENCRYPTION_KEY is not set on this server instance',
+  MFA_ALREADY_ENABLED: '409 CONFLICT - MFA is already enabled for this account',
+  MFA_NOT_ENABLED: '409 CONFLICT - MFA is not enabled for this account',
   WAITLIST_CLOSED: '409 CONFLICT - the founding-salon waitlist is closed (WAITLIST_OPEN=false)',
 };

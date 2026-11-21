@@ -4,7 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createLogger } from '../src/logger.js';
-import { call, makeCustomer, makeOwner, openAllDay, PASSWORD, phone, slotAt, startCtx, type Ctx, type Owner } from './helpers.js';
+import { call, makeCustomer, makeEmailVerificationToken, makeOwner, openAllDay, PASSWORD, phone, slotAt, startCtx, type Ctx, type Owner } from './helpers.js';
 
 let ctx: Ctx;
 let owner: Owner;
@@ -59,7 +59,8 @@ describe('auth', () => {
 
   it('registration validation: duplicate email, bad phone, weak password, missing contact', async () => {
     const c = await makeCustomer(ctx);
-    const dup = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'X', email: c.email, password: PASSWORD } });
+    const dupToken = await makeEmailVerificationToken(ctx, c.email);
+    const dup = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'X', email: c.email, password: PASSWORD, emailVerificationToken: dupToken } });
     expect(dup.status).toBe(409);
     expect((await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'X', phone: '12345', password: PASSWORD } })).status).toBe(422);
     expect((await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'X', email: 'a@b.co', password: 'abcdefgh' } })).status).toBe(422);
@@ -398,7 +399,9 @@ describe('admin, sales and misc', () => {
     expect((await call(ctx, 'GET', '/v1/sales/pipeline', { token: agent })).body.data.total).toBe(1);
     expect((await call(ctx, 'GET', '/v1/admin/stats', { token: agent })).status).toBe(403);
     expect((await call(ctx, 'GET', '/v1/sales/leads', { token: owner.token })).status).toBe(403);
-    const reg = await call(ctx, 'POST', '/v1/auth/register-owner', { body: { fullName: 'Invited', phone: phone(), email: `inv-${randomUUID()}@example.test`, password: PASSWORD, inviteCode: inv.body.data.code, salon: { name: 'Lead Salon' } } });
+    const invEmail = `inv-${randomUUID()}@example.test`;
+    const invEmailToken = await makeEmailVerificationToken(ctx, invEmail);
+    const reg = await call(ctx, 'POST', '/v1/auth/register-owner', { body: { fullName: 'Invited', phone: phone(), email: invEmail, password: PASSWORD, emailVerificationToken: invEmailToken, inviteCode: inv.body.data.code, salon: { name: 'Lead Salon' } } });
     expect(reg.status).toBe(201);
     expect((await call(ctx, 'GET', `/v1/sales/leads/${lead.body.data.id}`, { token: agent })).body.data.stage).toBe('trial');
     expect((await call(ctx, 'GET', `/v1/invites/${inv.body.data.code}`)).status).toBe(404); // used

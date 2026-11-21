@@ -65,6 +65,9 @@ All configuration comes from environment variables, validated with zod at startu
 | `SMTP_USER` / `SMTP_PASS` | empty | SMTP login (Brevo: SMTP login + SMTP key). **Secrets** |
 | `MAIL_FROM` | empty | sender, e.g. `Trim by TokenBurners <waitlist@your-verified-domain>`; must be a verified Brevo sender |
 | `WAITLIST_NOTIFY_TO` | empty | TokenBurners inbox that gets a copy of every waitlist sign-up; empty = no copy |
+| `MFA_ENCRYPTION_KEY` | empty | AES-256-GCM key (64 hex chars) for encrypting TOTP secrets. Empty = MFA setup disabled. **Secret** |
+| `RATE_LIMIT_OTP_PER_EMAIL_PER_HOUR` | 5 | email verification OTPs per email address per hour |
+| `RATE_LIMIT_OTP_PER_IP_PER_HOUR` | 20 | email verification OTPs per IP per hour |
 
 Mail is optional: when `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` or `MAIL_FROM` is empty the mailer is disabled, one warning (key names only) is logged at start-up, and sign-ups still succeed without e-mails.
 

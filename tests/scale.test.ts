@@ -3,7 +3,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { RedisCache } from '../src/infra/cache.js';
 import { rollupRange } from '../src/lib/rollup.js';
 import { addDays, localDateOf } from '../src/lib/slots.js';
-import { call, eventResult, FakeRedis, makeCustomer, makeOwner, openAllDay, PASSWORD, sign, slotAt, startCtx, webhook, type Ctx, type Owner } from './helpers.js';
+import { call, eventResult, FakeRedis, makeCustomer, makeEmailVerificationToken, makeOwner, openAllDay, PASSWORD, sign, slotAt, startCtx, webhook, type Ctx, type Owner } from './helpers.js';
 
 const ctxs: Ctx[] = [];
 const boot = async (env: Record<string, string> = {}, extra: Parameters<typeof startCtx>[1] = {}) => {
@@ -43,7 +43,11 @@ describe('rate limiting', () => {
     const av = () => call(ctx, 'GET', `/v1/salons/${o.salonId}/availability?serviceIds=${o.serviceId}&date=${date}`);
     expect([(await av()).status, (await av()).status, (await av()).status]).toEqual([200, 200, 429]);
 
-    const reg = (n: number) => call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'R', email: `reg${n}-${randomUUID()}@example.test`, password: PASSWORD } });
+    const reg = async (n: number) => {
+      const e = `reg${n}-${randomUUID()}@example.test`;
+      const t = await makeEmailVerificationToken(ctx, e);
+      return call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'R', email: e, password: PASSWORD, emailVerificationToken: t } });
+    };
     expect([(await reg(1)).status, (await reg(2)).status, (await reg(3)).status]).toEqual([201, 201, 429]);
 
     const ci = () => call(ctx, 'POST', `/v1/salons/${o.salonId}/checkin`, { token: o.token, body: { qrToken: 'x'.repeat(20) } });

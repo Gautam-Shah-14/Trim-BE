@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import pg from 'pg';
 import { inject } from 'vitest';
@@ -70,6 +70,9 @@ export async function startCtx(overrides: Record<string, string> = {}, extra: Pa
     RATE_LIMIT_HOLD_PER_MIN: '100000',
     RATE_LIMIT_CHECKIN_PER_MIN: '100000',
     RATE_LIMIT_WAITLIST_PER_HOUR: '100000',
+    RATE_LIMIT_OTP_PER_EMAIL_PER_HOUR: '100000',
+    RATE_LIMIT_OTP_PER_IP_PER_HOUR: '100000',
+    MFA_ENCRYPTION_KEY: randomBytes(32).toString('hex'),
     // caches off by default so tests that edit rows with SQL see them immediately; cache.test.ts turns them on
     CACHE_TTL_PLANS_S: '0',
     CACHE_TTL_CATALOG_S: '0',
@@ -147,9 +150,10 @@ export interface Owner {
 /** Register an owner, approve the salon, add one 30-minute service. */
 export async function makeOwner(ctx: Ctx, opts: { approve?: boolean; lat?: number; lng?: number; city?: string; name?: string } = {}): Promise<Owner> {
   const email = `owner-${uniq()}@example.test`;
+  const emailVerificationToken = await makeEmailVerificationToken(ctx, email);
   const r = await call(ctx, 'POST', '/v1/auth/register-owner', {
     body: {
-      fullName: 'Olivia Owner', phone: phone(), email, password: PASSWORD,
+      fullName: 'Olivia Owner', phone: phone(), email, password: PASSWORD, emailVerificationToken,
       salon: { name: opts.name ?? `Salon ${uniq()}`, city: opts.city ?? 'Pune', lat: opts.lat ?? 18.5204, lng: opts.lng ?? 73.8567 },
     },
   });
@@ -192,9 +196,21 @@ export async function openAllDay(ctx: Ctx, o: Owner): Promise<string> {
   return tz;
 }
 
+/** Insert a valid email verification token directly into the DB (test helper). */
+export async function makeEmailVerificationToken(ctx: Ctx, email: string): Promise<string> {
+  const token = randomBytes(32).toString('base64url');
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  await ctx.pool.query(
+    "INSERT INTO email_otps (email, otp_hash, token_hash, used_at, expires_at) VALUES ($1, 'used', $2, now(), now() + interval '15 minutes')",
+    [email.toLowerCase(), tokenHash],
+  );
+  return token;
+}
+
 export async function makeCustomer(ctx: Ctx): Promise<{ token: string; userId: string; email: string }> {
   const email = `cust-${uniq()}@example.test`;
-  const r = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'Chandni Customer', email, phone: phone(), password: PASSWORD } });
+  const emailVerificationToken = await makeEmailVerificationToken(ctx, email);
+  const r = await call(ctx, 'POST', '/v1/auth/register', { body: { fullName: 'Chandni Customer', email, phone: phone(), password: PASSWORD, emailVerificationToken } });
   if (r.status !== 201) throw new Error(`register failed: ${JSON.stringify(r.body)}`);
   return { token: r.body.data.accessToken, userId: r.body.data.user.id, email };
 }

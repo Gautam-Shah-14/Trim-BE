@@ -17,6 +17,7 @@ export interface SubscriptionRow {
   current_period_end: Date | null;
   comp_until: Date | null;
   past_due_since: Date | null;
+  founding_trial?: boolean;
 }
 
 export interface Entitlements {
@@ -64,8 +65,13 @@ export function entitlements(sub: SubscriptionRow, plans: Record<string, PlanRow
   } else {
     switch (sub.status) {
       case 'trialing':
-        if (sub.trial_ends_at && sub.trial_ends_at.getTime() > t) {
-          planCode = 'pro';
+        if (!sub.trial_ends_at) {
+          // Founding trial not yet activated (first login sets the date): grant access at the subscription's plan level
+          break;
+        }
+        if (sub.trial_ends_at.getTime() > t) {
+          // Non-founding trials get Pro; founding trials stay on their plan_code (Starter)
+          if (!sub.founding_trial) planCode = 'pro';
         } else {
           eff = 'expired';
           readOnly = true;
