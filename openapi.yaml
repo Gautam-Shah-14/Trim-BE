@@ -33,6 +33,10 @@ info:
     NAME_TAKEN: 409 CONFLICT - hairstyle name exists
     SELF_CHANGE: 409 CONFLICT - admins cannot change their own active state
     NOT_READY: 409 CONFLICT - export job not finished
+    EMAIL_NOT_VERIFIED: 400 VALIDATION_FAILED - email must be verified before registration (send OTP first)
+    MFA_NOT_CONFIGURED: 409 CONFLICT - MFA_ENCRYPTION_KEY is not set on this server instance
+    MFA_ALREADY_ENABLED: 409 CONFLICT - MFA is already enabled for this account
+    MFA_NOT_ENABLED: 409 CONFLICT - MFA is not enabled for this account
     WAITLIST_CLOSED: 409 CONFLICT - the founding-salon waitlist is closed (WAITLIST_OPEN=false)
 servers:
   - url: /v1
@@ -119,6 +123,10 @@ components:
                 - NAME_TAKEN
                 - SELF_CHANGE
                 - NOT_READY
+                - EMAIL_NOT_VERIFIED
+                - MFA_NOT_CONFIGURED
+                - MFA_ALREADY_ENABLED
+                - MFA_NOT_ENABLED
                 - WAITLIST_CLOSED
                 - booking.view
                 - booking.create
@@ -3516,6 +3524,50 @@ components:
         - received
         - result
       additionalProperties: false
+    EmailVerificationResult:
+      type: object
+      properties:
+        emailVerificationToken:
+          type: string
+      required:
+        - emailVerificationToken
+      additionalProperties: false
+    MfaSetup:
+      type: object
+      properties:
+        secret:
+          type: string
+        otpAuthUrl:
+          type: string
+        qrDataUrl:
+          type: string
+      required:
+        - secret
+        - otpAuthUrl
+        - qrDataUrl
+      additionalProperties: false
+    MfaBackupCodes:
+      type: object
+      properties:
+        backupCodes:
+          type: array
+          items:
+            type: string
+      required:
+        - backupCodes
+      additionalProperties: false
+    MfaRequired:
+      type: object
+      properties:
+        mfaRequired:
+          type: boolean
+          const: true
+        mfaToken:
+          type: string
+      required:
+        - mfaRequired
+        - mfaToken
+      additionalProperties: false
     WaitlistStatus:
       type: object
       properties:
@@ -3871,6 +3923,9 @@ paths:
                   maxLength: 254
                   format: email
                   pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                emailVerificationToken:
+                  type: string
+                  maxLength: 200
                 password:
                   type: string
                   pattern: ^(?=.*[A-Za-z])(?=.*\d).{8,128}$
@@ -3936,6 +3991,10 @@ paths:
                   maxLength: 254
                   format: email
                   pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                emailVerificationToken:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
                 password:
                   type: string
                   pattern: ^(?=.*[A-Za-z])(?=.*\d).{8,128}$
@@ -3984,6 +4043,7 @@ paths:
                 - fullName
                 - phone
                 - email
+                - emailVerificationToken
                 - password
                 - salon
               additionalProperties: false
@@ -4141,6 +4201,269 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /auth/send-otp:
+    post:
+      tags:
+        - Auth
+      summary: Send a 6-digit verification OTP to an email address
+      description: "Rate-limited: 5/email/hour, 20/IP/hour"
+      operationId: post_auth_send_otp
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+              required:
+                - email
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Ok"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security: []
+  /auth/verify-otp:
+    post:
+      tags:
+        - Auth
+      summary: Verify an email OTP and get a one-time verification token
+      operationId: post_auth_verify_otp
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  maxLength: 254
+                  format: email
+                  pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                code:
+                  type: string
+                  pattern: ^\d{6}$
+              required:
+                - email
+                - code
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EmailVerificationResult"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security: []
+  /auth/mfa/setup:
+    post:
+      tags:
+        - Auth
+      summary: Generate a TOTP secret for MFA setup (returns QR code)
+      operationId: post_auth_mfa_setup
+      parameters: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MfaSetup"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/mfa/verify-setup:
+    post:
+      tags:
+        - Auth
+      summary: Verify TOTP code to complete MFA setup, returns backup codes
+      operationId: post_auth_mfa_verify_setup
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                  pattern: ^\d{6}$
+              required:
+                - code
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MfaBackupCodes"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/mfa/disable:
+    post:
+      tags:
+        - Auth
+      summary: Disable MFA (requires a valid TOTP code)
+      operationId: post_auth_mfa_disable
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                  pattern: ^\d{6}$
+              required:
+                - code
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Ok"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/mfa/challenge:
+    post:
+      tags:
+        - Auth
+      summary: Complete MFA challenge with TOTP code or backup code
+      operationId: post_auth_mfa_challenge
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mfaToken:
+                  type: string
+                  minLength: 10
+                  maxLength: 2000
+                code:
+                  type: string
+                  pattern: ^\d{6}$
+                backupCode:
+                  type: string
+                  minLength: 1
+                  maxLength: 20
+                deviceLabel:
+                  type: string
+                  maxLength: 100
+                client:
+                  type: string
+                  enum:
+                    - customer_app
+                    - salon_app
+                    - desktop
+                    - website
+              required:
+                - mfaToken
+              additionalProperties: false
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AuthResult"
+                  meta:
+                    type: object
+                    description: "Pagination: limit, nextCursor"
+                required:
+                  - data
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security: []
   /auth/logout-all:
     post:
       tags:
